@@ -64,6 +64,14 @@ import {
   updateLearningPlanStatus,
   updateWorkflow,
   validateWorkflow,
+  listSkills,
+  createSkill as apiCreateSkill,
+  deleteSkill as apiDeleteSkill,
+  toggleSkill as apiToggleSkill,
+  importSkill as apiImportSkill,
+  exportSkills as apiExportSkills,
+  installSkill as apiInstallSkill,
+  uninstallSkill as apiUninstallSkill,
 } from './api';
 import {
   AgentEvent,
@@ -88,6 +96,7 @@ import {
   RagDocument,
   RagResult,
   ResumeSnapshot,
+  SkillDefinition,
   SuggestionRecord,
   TaskResultPayload,
   TaskSummary,
@@ -98,7 +107,7 @@ import {
   WorkflowValidation,
 } from './types';
 
-type ViewKey = 'run' | 'workflow' | 'reports' | 'chat' | 'history' | 'llm' | 'mcp' | 'benchmark';
+type ViewKey = 'run' | 'workflow' | 'reports' | 'chat' | 'history' | 'llm' | 'mcp' | 'benchmark' | 'skills';
 type ChatMode = 'task' | 'knowledge' | 'coach';
 type ChatMessage = { role: 'user' | 'assistant'; content: string; source?: string; day?: number | null; theme?: string | null };
 type FocusKind = 'module' | 'file';
@@ -156,6 +165,7 @@ const navItems: Array<{ view: ViewKey; label: string; icon: typeof LayoutDashboa
   { view: 'history', label: '历史', icon: History },
   { view: 'llm', label: 'LLM', icon: BarChart3 },
   { view: 'mcp', label: 'MCP', icon: Wrench },
+  { view: 'skills', label: 'Skills', icon: Boxes },
   { view: 'benchmark', label: 'Bench', icon: Activity },
 ];
 
@@ -167,6 +177,7 @@ const palette = [
   { type: 'agent', name: 'RAG Processor', icon: BookOpen, config: { agent_type: 'rag_processor', max_files: 100, ingest: true, collection: 'project-memory' } },
   { type: 'rag', name: 'Knowledge Query', icon: Database, config: { collection: 'default', top_k: 5 } },
   { type: 'mcp_tool', name: 'MCP Tool', icon: Wrench, config: { tool_name: 'filesystem.list' } },
+  { type: 'skill', name: 'Skills', icon: Boxes, config: { skill_code: '' } },
   { type: 'supervisor', name: 'Supervisor', icon: Activity, config: {} },
   { type: 'human_review', name: 'Human Review', icon: Check, config: { require_comment: false } },
   { type: 'reporter', name: 'Reporter', icon: FileSearch, config: {} },
@@ -254,6 +265,13 @@ export function App() {
   const [focusFiles, setFocusFiles] = useState<string[]>([]);
   const [focusLoading, setFocusLoading] = useState(false);
   const [focusError, setFocusError] = useState('');
+  const [skills, setSkills] = useState<SkillDefinition[]>([]);
+  const [skillFormOpen, setSkillFormOpen] = useState(false);
+  const [skillForm, setSkillForm] = useState({ code: '', name: '', description: '' });
+  const [skillImportJson, setSkillImportJson] = useState('');
+  const [skillError, setSkillError] = useState('');
+  const [installUrl, setInstallUrl] = useState('');
+  const [installing, setInstalling] = useState(false);
 
   const canvasRef = useRef<HTMLDivElement | null>(null);
   const dragRef = useRef<{ id: string; dx: number; dy: number } | null>(null);
@@ -301,7 +319,12 @@ export function App() {
     refreshLlmGovernance().catch(() => undefined);
     refreshMcp('real_filesystem').catch(() => undefined);
     refreshBenchmarks('mcp').catch(() => undefined);
+    refreshSkills().catch(() => undefined);
   }, []);
+
+  useEffect(() => {
+    if (activeView === 'skills') refreshSkills().catch(() => undefined);
+  }, [activeView]);
 
   async function refreshTasks() {
     setTasks(await listTasks());
@@ -440,6 +463,100 @@ export function App() {
     await refreshLlmGovernance(llmAgentFilter);
     await refreshLlmTraces(llmTraceAgent);
     return result;
+  }
+
+  async function refreshSkills() {
+    setSkills(await listSkills());
+  }
+
+  async function handleCreateSkill() {
+    setSkillError('');
+    try {
+      await apiCreateSkill({
+        code: skillForm.code,
+        name: skillForm.name,
+        description: skillForm.description,
+        parameters: [],
+      });
+      setSkillFormOpen(false);
+      setSkillForm({ code: '', name: '', description: '' });
+      await refreshSkills();
+    } catch (err) {
+      setSkillError(err instanceof Error ? err.message : 'Failed to create skill');
+    }
+  }
+
+  async function handleDeleteSkill(code: string) {
+    setSkillError('');
+    try {
+      await apiDeleteSkill(code);
+      await refreshSkills();
+    } catch (err) {
+      setSkillError(err instanceof Error ? err.message : 'Failed to delete skill');
+    }
+  }
+
+  async function handleToggleSkill(code: string, enabled: boolean) {
+    setSkillError('');
+    try {
+      await apiToggleSkill(code, enabled);
+      await refreshSkills();
+    } catch (err) {
+      setSkillError(err instanceof Error ? err.message : 'Failed to toggle skill');
+    }
+  }
+
+  async function handleImportSkill() {
+    setSkillError('');
+    try {
+      const parsed = JSON.parse(skillImportJson);
+      await apiImportSkill(parsed);
+      setSkillImportJson('');
+      await refreshSkills();
+    } catch (err) {
+      setSkillError(err instanceof Error ? err.message : 'Invalid JSON');
+    }
+  }
+
+  async function handleExportSkills() {
+    setSkillError('');
+    try {
+      const data = await apiExportSkills();
+      const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'skills-export.json';
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      setSkillError(err instanceof Error ? err.message : 'Failed to export skills');
+    }
+  }
+
+  async function handleInstallSkill() {
+    if (!installUrl.trim()) return;
+    setInstalling(true);
+    setSkillError('');
+    try {
+      await apiInstallSkill(installUrl);
+      setInstallUrl('');
+      await refreshSkills();
+    } catch (err) {
+      setSkillError(err instanceof Error ? err.message : 'Failed to install skill');
+    } finally {
+      setInstalling(false);
+    }
+  }
+
+  async function handleUninstallSkill(code: string) {
+    setSkillError('');
+    try {
+      await apiUninstallSkill(code);
+      await refreshSkills();
+    } catch (err) {
+      setSkillError(err instanceof Error ? err.message : 'Failed to uninstall skill');
+    }
   }
 
   function consumeTaskPayload(payload: AgentEvent | Record<string, unknown>) {
@@ -1165,7 +1282,7 @@ export function App() {
             </div>
 
             <div className="panel config-panel">
-              <NodeConfig node={selectedNode} onNodeChange={updateSelectedNode} onConfigChange={updateSelectedConfig} onDelete={deleteSelectedNode} />
+              <NodeConfig node={selectedNode} skills={skills} onNodeChange={updateSelectedNode} onConfigChange={updateSelectedConfig} onDelete={deleteSelectedNode} />
               <EdgeConfig
                 edge={edges.find((edge) => edgeKeyFor(edge) === selectedEdgeKey)}
                 nodes={nodes}
@@ -1306,6 +1423,118 @@ export function App() {
             onOpen={handleOpenBenchmark}
             onRefresh={() => refreshBenchmarks(benchmarkType)}
           />
+        ) : null}
+
+        {activeView === 'skills' ? (
+          <section className="skills-page">
+            <div className="skills-sidebar">
+              <div className="panel">
+                <div className="panel-title" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <span>Skills</span>
+                  <div style={{ display: 'flex', gap: 8 }}>
+                    <button className="small-button" onClick={handleExportSkills}>Export</button>
+                    <button className="small-button" onClick={() => setSkillFormOpen(true)}>+ Create</button>
+                  </div>
+                </div>
+                {skillError && <p style={{ color: '#f87171', fontSize: 13, padding: '0 14px' }}>{skillError}</p>}
+                <div className="skills-install-box">
+                  <div className="panel-title">Install from GitHub</div>
+                  <div style={{ display: 'flex', gap: 6 }}>
+                    <input
+                      className="input"
+                      placeholder="owner/repo or full URL"
+                      value={installUrl}
+                      onChange={(e) => setInstallUrl(e.target.value)}
+                      disabled={installing}
+                    />
+                    <button
+                      className="small-button primary-button"
+                      onClick={handleInstallSkill}
+                      disabled={installing || !installUrl.trim()}
+                    >
+                      {installing ? 'Installing...' : 'Install'}
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              {skillFormOpen && (
+                <div className="panel skills-form-box">
+                  <div className="panel-title">Create Skill</div>
+                  <div className="skills-form-fields">
+                    <input className="input" placeholder="code (e.g. my.skill)" value={skillForm.code} onChange={(e) => setSkillForm({ ...skillForm, code: e.target.value })} />
+                    <input className="input" placeholder="name" value={skillForm.name} onChange={(e) => setSkillForm({ ...skillForm, name: e.target.value })} />
+                    <input className="input" placeholder="description" value={skillForm.description} onChange={(e) => setSkillForm({ ...skillForm, description: e.target.value })} />
+                  </div>
+                  <div className="skills-form-actions">
+                    <button className="small-button primary-button" onClick={handleCreateSkill}>Save</button>
+                    <button className="small-button" onClick={() => { setSkillFormOpen(false); setSkillForm({ code: '', name: '', description: '' }); }}>Cancel</button>
+                  </div>
+                </div>
+              )}
+
+              <div className="panel skills-import-box">
+                <div className="panel-title">Import JSON</div>
+                <textarea
+                  className="input"
+                  rows={3}
+                  placeholder='{"code":"example","name":"Example","description":"..."}'
+                  value={skillImportJson}
+                  onChange={(e) => setSkillImportJson(e.target.value)}
+                  style={{ fontFamily: 'monospace', fontSize: 12 }}
+                />
+                <button className="small-button" style={{ marginTop: 8 }} onClick={handleImportSkill}>Import</button>
+              </div>
+            </div>
+
+            <div className="skills-main">
+              <div className="panel" style={{ padding: 14 }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 }}>
+                  <span style={{ fontSize: 13, color: '#6b7a8d' }}>{skills.length} skill{skills.length !== 1 ? 's' : ''}</span>
+                </div>
+                {skills.length === 0 ? (
+                  <div className="skill-empty">
+                    <div className="skill-empty-icon"><Boxes size={32} /></div>
+                    <div>No skills installed yet.</div>
+                    <div style={{ fontSize: 12, marginTop: 6, color: '#b0bec5' }}>Install from GitHub or create one manually.</div>
+                  </div>
+                ) : (
+                  <div className="skills-grid">
+                    {skills.map((skill) => (
+                      <div key={skill.code} className="skill-card">
+                        <div className="skill-card-header">
+                          <div className="skill-card-name">{skill.name || skill.code}</div>
+                          <div className="skill-card-actions">
+                            <label className="skill-card-toggle">
+                              <input
+                                type="checkbox"
+                                checked={skill.is_enabled}
+                                onChange={(e) => handleToggleSkill(skill.code, e.target.checked)}
+                              />
+                              On
+                            </label>
+                            {skill.source_type !== 'builtin' && (
+                              <button className="icon-button" onClick={() => handleUninstallSkill(skill.code)} title="Uninstall"><Trash2 size={14} /></button>
+                            )}
+                          </div>
+                        </div>
+                        <div className="skill-card-meta">
+                          <span className={`skill-tag skill-tag--${skill.source_type}`}>{skill.source_type}</span>
+                          <span>{skill.execution?.type ?? 'workflow'}</span>
+                        </div>
+                        {skill.description && <div className="skill-card-desc">{skill.description}</div>}
+                        {skill.source_url && (
+                          <div className="skill-card-source">
+                            <a href={skill.source_url} target="_blank" rel="noopener noreferrer">{skill.source_url}</a>
+                          </div>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </div>
+          </section>
         ) : null}
 
         {activeView === 'history' ? (
@@ -1768,6 +1997,7 @@ function WorkflowCanvas({
           })}
         </svg>
 
+
         {nodes.map((node) => (
           <div
             key={node.id}
@@ -1824,11 +2054,13 @@ function SavedWorkflows({
 
 function NodeConfig({
   node,
+  skills,
   onNodeChange,
   onConfigChange,
   onDelete,
 }: {
   node?: WorkflowNode;
+  skills: SkillDefinition[];
   onNodeChange: (patch: Partial<WorkflowNode>) => void;
   onConfigChange: (key: string, value: unknown) => void;
   onDelete: () => void;
@@ -1865,6 +2097,7 @@ function NodeConfig({
           <option value="agent">agent</option>
           <option value="rag">rag</option>
           <option value="mcp_tool">mcp_tool</option>
+          <option value="skill">skill</option>
           <option value="supervisor">supervisor</option>
           <option value="human_review">human_review</option>
           <option value="reporter">reporter</option>
@@ -1979,6 +2212,34 @@ function NodeConfig({
             arguments JSON
             <textarea value={mcpArgumentsText} onChange={(event) => handleMcpArgumentsChange(event.target.value)} />
             <FieldHelp>传给真实 MCP Tool 的参数。local 模式也会读取 root_path、file_path、max_files、limit 等字段。</FieldHelp>
+          </label>
+        </>
+      ) : null}
+      {node.type === 'skill' ? (
+        <>
+          <label>
+            Skill
+            <select value={String(node.config.skill_code ?? '')} onChange={(event) => onConfigChange('skill_code', event.target.value)}>
+              <option value="">-- 选择 Skill --</option>
+              {skills.filter((s) => s.is_enabled).map((s) => (
+                <option key={s.code} value={s.code}>{s.name || s.code}</option>
+              ))}
+            </select>
+            <FieldHelp>选择要执行的 Skill，从已安装的 Skill 列表中选取。</FieldHelp>
+          </label>
+          {node.config.skill_code ? (
+            <div style={{ fontSize: 12, color: '#6b7a8d', padding: '4px 0' }}>
+              {skills.find((s) => s.code === node.config.skill_code)?.description || ''}
+            </div>
+          ) : null}
+          <label>
+            input JSON
+            <textarea
+              value={String(node.config.skill_input ?? '{}')}
+              onChange={(event) => onConfigChange('skill_input', event.target.value)}
+              style={{ fontFamily: 'monospace', fontSize: 12 }}
+            />
+            <FieldHelp>传给 Skill 的输入参数，JSON 格式。</FieldHelp>
           </label>
         </>
       ) : null}

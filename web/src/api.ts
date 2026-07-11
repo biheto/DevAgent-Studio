@@ -18,6 +18,7 @@ import {
   McpToolCallLog,
   RagDocument,
   RagResult,
+  SkillDefinition,
   TaskDetail,
   TaskSummary,
   WorkflowEdge,
@@ -563,5 +564,98 @@ export async function validateWorkflow(payload: {
     }),
   });
   if (!response.ok) throw new Error(`Workflow validation failed: ${response.status}`);
+  return response.json();
+}
+
+export async function listSkills(): Promise<SkillDefinition[]> {
+  const response = await fetch(`${API_BASE}/api/v1/skills`);
+  if (!response.ok) throw new Error('Failed to list skills');
+  return response.json();
+}
+
+export async function getSkill(code: string): Promise<SkillDefinition> {
+  const response = await fetch(`${API_BASE}/api/v1/skills/${code}`);
+  if (!response.ok) throw new Error(`Skill not found: ${code}`);
+  return response.json();
+}
+
+export async function createSkill(payload: {
+  code: string;
+  name: string;
+  description?: string;
+  version?: string;
+  author?: string;
+  parameters?: SkillDefinition['parameters'];
+  execution?: SkillDefinition['execution'];
+}): Promise<SkillDefinition> {
+  const response = await fetch(`${API_BASE}/api/v1/skills`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+  if (!response.ok) throw new Error('Failed to create skill');
+  return response.json();
+}
+
+export async function deleteSkill(code: string): Promise<void> {
+  const response = await fetch(`${API_BASE}/api/v1/skills/${code}`, { method: 'DELETE' });
+  if (!response.ok) throw new Error(`Failed to delete skill: ${code}`);
+}
+
+export async function toggleSkill(code: string, enabled: boolean): Promise<SkillDefinition> {
+  const response = await fetch(`${API_BASE}/api/v1/skills/${code}/enabled`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ enabled }),
+  });
+  if (!response.ok) throw new Error(`Failed to toggle skill: ${code}`);
+  return response.json();
+}
+
+export async function executeSkill(code: string, input_data: Record<string, unknown>): Promise<unknown> {
+  const response = await fetch(`${API_BASE}/api/v1/skills/${code}/execute`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ input_data }),
+  });
+  if (!response.ok) throw new Error(`Failed to execute skill: ${code}`);
+  return response.json();
+}
+
+export async function importSkill(skillJson: Record<string, unknown>): Promise<SkillDefinition> {
+  const response = await fetch(`${API_BASE}/api/v1/skills/import`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(skillJson),
+  });
+  if (!response.ok) throw new Error('Failed to import skill');
+  return response.json();
+}
+
+export async function exportSkills(): Promise<SkillDefinition[]> {
+  const response = await fetch(`${API_BASE}/api/v1/skills/export/all`);
+  if (!response.ok) throw new Error('Failed to export skills');
+  return response.json();
+}
+
+export async function installSkill(url: string): Promise<SkillDefinition[]> {
+  const response = await fetch(`${API_BASE}/api/v1/skills/install`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ url }),
+  });
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(text || 'Failed to install skill');
+  }
+  return response.json();
+}
+
+export async function uninstallSkill(code: string): Promise<{ status: string; code: string }> {
+  const response = await fetch(`${API_BASE}/api/v1/skills/${code}/uninstall`, { method: 'DELETE' });
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(text || 'Failed to uninstall skill');
+  }
   return response.json();
 }

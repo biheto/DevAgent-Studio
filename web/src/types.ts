@@ -411,3 +411,34 @@ export type BenchmarkRun = {
   finished_at?: string | null;
   created_at: string;
 };
+
+export type SkillParameter = {
+  name: string;
+  type: string;
+  required: boolean;
+  default?: string;
+  description?: string;
+  options?: string[];
+};
+
+export type SkillExecution = {
+  type: string;
+  nodes: Array<{ id: string; type: string; name: string; config?: Record<string, unknown> }>;
+  edges: Array<{ source: string; target: string }>;
+};
+
+export type SkillDefinition = {
+  code: string;
+  name: string;
+  description?: string;
+  version?: string;
+  author?: string;
+  source_type: string;
+  source_url?: string;
+  skill_path?: string;
+  parameters: SkillParameter[];
+  execution: SkillExecution;
+  is_enabled: boolean;
+  created_at: string;
+  updated_at: string;
+};
