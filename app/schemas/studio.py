@@ -353,3 +353,54 @@ class TaskRunResponse(BaseModel):
     status: str
     events: list[dict[str, Any]]
     result: dict[str, Any]
+
+
+class SkillParameter(BaseModel):
+    name: str
+    type: str = "string"
+    required: bool = True
+    default: Optional[str] = None
+    description: Optional[str] = None
+    options: list[str] = Field(default_factory=list)
+
+
+class SkillExecution(BaseModel):
+    type: str = "workflow"
+    nodes: list[dict[str, Any]] = Field(default_factory=list)
+    edges: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class SkillDefinitionRequest(BaseModel):
+    code: str = Field(..., min_length=1, max_length=100)
+    name: str = Field(..., min_length=1, max_length=200)
+    description: Optional[str] = None
+    version: Optional[str] = None
+    author: Optional[str] = None
+    parameters: list[SkillParameter] = Field(default_factory=list)
+    execution: SkillExecution = Field(default_factory=SkillExecution)
+
+
+class SkillDefinitionResponse(BaseModel):
+    code: str
+    name: str
+    description: Optional[str] = None
+    version: Optional[str] = None
+    author: Optional[str] = None
+    source_type: str
+    parameters: list[dict[str, Any]]
+    execution: dict[str, Any]
+    is_enabled: bool
+    created_at: str
+    updated_at: str
+
+
+class SkillToggleRequest(BaseModel):
+    enabled: bool
+
+
+class SkillExecuteRequest(BaseModel):
+    input_data: dict[str, Any] = Field(default_factory=dict)
+
+
+class SkillInstallRequest(BaseModel):
+    url: str

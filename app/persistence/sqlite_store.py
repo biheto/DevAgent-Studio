@@ -236,6 +236,31 @@ class SQLiteTaskStore:
                 )
                 """
             )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS skill_definition (
+                    code TEXT PRIMARY KEY,
+                    name TEXT NOT NULL,
+                    description TEXT,
+                    version TEXT,
+                    author TEXT,
+                    source_type TEXT NOT NULL DEFAULT 'user',
+                    parameters_json TEXT,
+                    execution_json TEXT NOT NULL,
+                    is_enabled INTEGER NOT NULL DEFAULT 1,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                )
+                """
+            )
+            for col_sql in [
+                "ALTER TABLE skill_definition ADD COLUMN source_url TEXT DEFAULT ''",
+                "ALTER TABLE skill_definition ADD COLUMN skill_path TEXT DEFAULT ''",
+            ]:
+                try:
+                    conn.execute(col_sql)
+                except sqlite3.OperationalError:
+                    pass
 
     def create_task(self, task_id: str, goal: str, project_path: str | None, status: str) -> None:
         now = utc_now_iso()
@@ -1165,6 +1190,111 @@ class SQLiteTaskStore:
         )
         total_tokens = int(usage.get("total_tokens") or usage.get("total_token_count") or input_tokens + output_tokens)
         return input_tokens, output_tokens, total_tokens
+
+    def save_skill(self, skill: dict[str, Any]) -> dict[str, Any]:
+        now = utc_now_iso()
+        code = str(skill.get("code") or "").strip()
+        if not code:
+            raise ValueError("code is required")
+        with self._connect() as conn:
+            existing = conn.execute(
+                "SELECT created_at FROM skill_definition WHERE code = ?",
+                (code,),
+            ).fetchone()
+            created_at = existing["created_at"] if existing else now
+            conn.execute(
+                """
+                INSERT OR REPLACE INTO skill_definition(
+                    code, name, description, version, author, source_type,
+                    parameters_json, execution_json, is_enabled, created_at, updated_at,
+                    source_url, skill_path
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    code,
+                    str(skill.get("name") or code),
+                    skill.get("description"),
+                    skill.get("version"),
+                    skill.get("author"),
+                    str(skill.get("source_type") or "user"),
+                    json.dumps(skill.get("parameters") or [], ensure_ascii=False),
+                    json.dumps(skill.get("execution") or {}, ensure_ascii=False),
+                    1 if skill.get("is_enabled", True) else 0,
+                    created_at,
+                    now,
+                    skill.get("source_url", ""),
+                    skill.get("skill_path", ""),
+                ),
+            )
+        return self.get_skill(code) or {}
+
+    def get_skill(self, code: str) -> dict[str, Any] | None:
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT code, name, description, version, author, source_type,
+                       parameters_json, execution_json, is_enabled, created_at, updated_at,
+                       source_url, skill_path
+                FROM skill_definition WHERE code = ?
+                """,
+                (code,),
+            ).fetchone()
+        return self._skill_row_to_dict(row) if row else None
+
+    def list_skills(self, source_type: str | None = None) -> list[dict[str, Any]]:
+        query = """
+            SELECT code, name, description, version, author, source_type,
+                   parameters_json, execution_json, is_enabled, created_at, updated_at,
+                   source_url, skill_path
+            FROM skill_definition
+        """
+        params: list[Any] = []
+        if source_type:
+            query += " WHERE source_type = ?"
+            params.append(source_type)
+        query += " ORDER BY created_at DESC"
+        with self._connect() as conn:
+            rows = conn.execute(query, tuple(params)).fetchall()
+        return [self._skill_row_to_dict(row) for row in rows]
+
+    def delete_skill(self, code: str) -> bool:
+        with self._connect() as conn:
+            cursor = conn.execute("DELETE FROM skill_definition WHERE code = ?", (code,))
+        return cursor.rowcount > 0
+
+    def update_skill_enabled(self, code: str, enabled: bool) -> dict[str, Any] | None:
+        with self._connect() as conn:
+            conn.execute(
+                "UPDATE skill_definition SET is_enabled = ?, updated_at = ? WHERE code = ?",
+                (1 if enabled else 0, utc_now_iso(), code),
+            )
+        return self.get_skill(code)
+
+    def _skill_row_to_dict(self, row: sqlite3.Row) -> dict[str, Any]:
+        item = dict(row)
+        item["parameters"] = json.loads(item.pop("parameters_json") or "[]")
+        item["execution"] = json.loads(item.pop("execution_json") or "{}")
+        item["is_enabled"] = bool(item["is_enabled"])
+        return item
+
+    def seed_builtin_skills(self) -> None:
+        from app.skills.builtin import builtin_skills
+
+        for skill in builtin_skills():
+            existing = self.get_skill(skill.code)
+            if existing and existing.get("source_type") == "builtin":
+                continue
+            if existing:
+                continue
+            self.save_skill({
+                "code": skill.code,
+                "name": skill.name,
+                "description": skill.description,
+                "source_type": "builtin",
+                "parameters": [],
+                "execution": {"type": "builtin", "handler": skill.code},
+            })
 
 
 task_store = SQLiteTaskStore()
