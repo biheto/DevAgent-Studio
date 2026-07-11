@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import AsyncIterator
+from typing import Any
 from uuid import uuid4
 
 from fastapi import APIRouter, HTTPException
@@ -48,6 +49,11 @@ from app.schemas.studio import (
     HumanReviewResponse,
     KnowledgeNoteRequest,
     KnowledgeNoteResponse,
+    SkillDefinitionRequest,
+    SkillDefinitionResponse,
+    SkillExecuteRequest,
+    SkillInstallRequest,
+    SkillToggleRequest,
     LearningCoachRequest,
     LearningCoachResponse,
     LearningChatRequest,
@@ -1494,3 +1500,109 @@ def _review_content(action: str, comment: str | None) -> str:
     }
     suffix = f"：{comment}" if comment else ""
     return f"{labels[action]}{suffix}"
+
+
+@router.get("/skills", tags=["Skills"])
+def list_skills() -> list[dict[str, Any]]:
+    return task_store.list_skills()
+
+
+@router.get("/skills/{code}", response_model=SkillDefinitionResponse, tags=["Skills"])
+def get_skill(code: str) -> dict[str, Any]:
+    skill = task_store.get_skill(code)
+    if not skill:
+        raise HTTPException(status_code=404, detail=f"Skill not found: {code}")
+    return skill
+
+
+@router.post("/skills", response_model=SkillDefinitionResponse, tags=["Skills"])
+def create_skill(request: SkillDefinitionRequest) -> dict[str, Any]:
+    existing = task_store.get_skill(request.code)
+    if existing and existing.get("source_type") == "builtin":
+        raise HTTPException(status_code=400, detail="Cannot overwrite builtin skill")
+    skill_data = request.model_dump()
+    skill_data["source_type"] = "user"
+    return task_store.save_skill(skill_data)
+
+
+@router.delete("/skills/{code}", tags=["Skills"])
+def delete_skill(code: str) -> dict[str, str]:
+    existing = task_store.get_skill(code)
+    if not existing:
+        raise HTTPException(status_code=404, detail=f"Skill not found: {code}")
+    if existing.get("source_type") == "builtin":
+        raise HTTPException(status_code=400, detail="Cannot delete builtin skill")
+    task_store.delete_skill(code)
+    return {"status": "deleted", "code": code}
+
+
+@router.patch("/skills/{code}/enabled", tags=["Skills"])
+def toggle_skill(code: str, request: SkillToggleRequest) -> dict[str, Any]:
+    skill = task_store.update_skill_enabled(code, request.enabled)
+    if not skill:
+        raise HTTPException(status_code=404, detail=f"Skill not found: {code}")
+    return skill
+
+
+@router.post("/skills/{code}/execute", tags=["Skills"])
+def execute_skill(code: str, request: SkillExecuteRequest) -> dict[str, Any]:
+    skill = task_store.get_skill(code)
+    if not skill:
+        raise HTTPException(status_code=404, detail=f"Skill not found: {code}")
+    if not skill.get("is_enabled"):
+        raise HTTPException(status_code=400, detail=f"Skill is disabled: {code}")
+
+    from app.skills.executor import execute_skill_by_type, _safe_int
+    input_data = request.input_data or {}
+    result = execute_skill_by_type(
+        skill_code=code,
+        execution=skill.get("execution", {}),
+        input_data=input_data,
+        goal=input_data.get("goal", ""),
+        project_path=input_data.get("project_path"),
+        max_files=_safe_int(input_data.get("max_files"), 200),
+    )
+    if "error" in result:
+        raise HTTPException(status_code=500, detail=result["error"])
+    return result
+
+
+@router.post("/skills/import", tags=["Skills"])
+def import_skill(skill_json: dict[str, Any]) -> dict[str, Any]:
+    required_fields = ["code", "name", "execution"]
+    for field in required_fields:
+        if field not in skill_json:
+            raise HTTPException(status_code=400, detail=f"Missing required field: {field}")
+    skill_json["source_type"] = "user"
+    return task_store.save_skill(skill_json)
+
+
+@router.get("/skills/export/all", tags=["Skills"])
+def export_all_skills() -> list[dict[str, Any]]:
+    return task_store.list_skills(source_type="user")
+
+
+@router.post("/skills/install", tags=["Skills"])
+def install_skill(request: SkillInstallRequest) -> list[dict[str, Any]]:
+    from app.skills.installer import SkillInstaller
+
+    try:
+        installer = SkillInstaller()
+        return installer.install_skill(request.url)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@router.delete("/skills/{code}/uninstall", tags=["Skills"])
+def uninstall_skill(code: str) -> dict[str, str]:
+    existing = task_store.get_skill(code)
+    if not existing:
+        raise HTTPException(status_code=404, detail=f"Skill not found: {code}")
+    if existing.get("source_type") == "builtin":
+        raise HTTPException(status_code=400, detail="Cannot uninstall builtin skill")
+    from app.skills.installer import SkillInstaller
+
+    installer = SkillInstaller()
+    installer.uninstall_skill(code)
+    task_store.delete_skill(code)
+    return {"status": "uninstalled", "code": code}

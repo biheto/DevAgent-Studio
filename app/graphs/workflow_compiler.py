@@ -11,6 +11,7 @@ from app.graphs.project_analyzer_graph import project_analyzer_graph
 from app.graphs.studio_graphs import code_review_graph, learning_coach_graph, rag_process_graph
 from app.harness.events import utc_now_iso
 from app.persistence.rag_store import rag_store
+from app.persistence.sqlite_store import task_store
 from app.providers.mcp_provider import mcp_provider
 
 
@@ -52,7 +53,7 @@ class WorkflowState(TypedDict, total=False):
     validation: dict[str, Any]
 
 
-SUPPORTED_NODE_TYPES = {"planner", "agent", "rag", "mcp_tool", "supervisor", "human_review", "reporter"}
+SUPPORTED_NODE_TYPES = {"planner", "agent", "rag", "mcp_tool", "skill", "supervisor", "human_review", "reporter"}
 SUPPORTED_EDGE_CONDITIONS = {"always", "on_status", "contains", "truthy_output"}
 
 
@@ -605,6 +606,9 @@ def _execute_node(node: dict[str, Any], state: WorkflowState, outputs: dict[str,
     if node_type == "mcp_tool":
         return _run_tool_node(node, config, project_path, max_files)
 
+    if node_type == "skill":
+        return _run_skill_node(node, config, goal, project_path)
+
     if node_type == "supervisor":
         notes = _supervisor_notes(outputs)
         return {"notes": notes}, {"agent_output": _agent_output(node, "supervisor", "\n".join(notes))}
@@ -748,6 +752,47 @@ def _run_tool_node(
     )
     tool_call = {"node_id": node["id"], "tool_name": tool_name, "status": "completed", "result": result}
     return result, {"tool_call": tool_call, "agent_output": _agent_output(node, tool_name, f"Tool {tool_name} completed.")}
+
+
+def _run_skill_node(
+    node: dict[str, Any],
+    config: dict[str, Any],
+    goal: str,
+    project_path: str | None,
+) -> tuple[Any, dict[str, Any]]:
+    import json as _json
+    from app.skills.executor import execute_skill_by_type, _safe_int
+
+    skill_code = str(config.get("skill_code") or "")
+    if not skill_code:
+        return {"error": "skill_code is required"}, {"agent_output": _agent_output(node, "skill", "Skill node: no skill_code configured.")}
+
+    skill_row = task_store.get_skill(skill_code)
+    if not skill_row:
+        return {"error": f"Skill not found: {skill_code}"}, {"agent_output": _agent_output(node, "skill", f"Skill {skill_code} not found in database.")}
+
+    skill_input = config.get("skill_input") or {}
+    if isinstance(skill_input, str):
+        try:
+            skill_input = _json.loads(skill_input) if skill_input.strip() else {}
+        except Exception:
+            skill_input = {}
+
+    result = execute_skill_by_type(
+        skill_code=skill_code,
+        execution=skill_row.get("execution", {}),
+        input_data=skill_input,
+        goal=goal,
+        project_path=project_path,
+        max_files=_safe_int(config.get("max_files"), 200),
+    )
+
+    if "error" in result:
+        return result, {"agent_output": _agent_output(node, "skill", f"Skill {skill_code} failed: {result['error']}")}
+
+    exec_type = skill_row.get("execution", {}).get("type", "prompt")
+    text = f"Skill {skill_code} ({exec_type}) completed."
+    return {"skill_code": skill_code, "result": result}, {"agent_output": _agent_output(node, "skill", text)}
 
 
 def _event(
