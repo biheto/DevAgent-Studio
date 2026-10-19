@@ -140,6 +140,12 @@ The RAG layer is designed as a governed project knowledge base rather than a sim
 | Chunk Gold Set | Benchmark cases can store expected chunk IDs and calculate Chunk Hit, Recall@K, Precision@K, and MRR. |
 | Gold Set UI | The Benchmark page can create, edit, delete, and load RAG Gold Set cases into benchmark runs. |
 
+### Document Chunking
+
+RAG ingestion uses type-aware chunking with `tiktoken` (`cl100k_base`) token limits and overlap. Markdown preserves heading paths; Python uses AST class/method boundaries; Java and TypeScript/TSX use declaration boundaries; other text falls back to recursive separators. Retrieved child chunks link to parent context, and non-code text uses a local token-hash sentence-boundary heuristic. Chunk metadata is stored in `rag_chunk.metadata_json`; vectors are stored in `rag_chunk.embedding vector(n)` in PostgreSQL/pgvector. Without a working embedding API key, vectors use the local hash fallback.
+
+The chunking Gold Set in `tests/data/rag_chunking_gold.json` covers Markdown, Java, Python, and deployment text. Its current Recall@3 is 1.00. Run the real PostgreSQL integration test with `$env:DEV_AGENT_TEST_PGVECTOR='1'; .\.venv\Scripts\python.exe -m pytest tests\test_rag_postgres_integration.py -q`; the test creates and cleans up a random collection. Latest verification: integration test passed and the full suite passed (14 tests).
+
 This turns RAG from "can retrieve something" into "can be versioned, permissioned, measured, and improved."
 
 ## Governed Long-term Memory
@@ -337,6 +343,14 @@ cd ..
 # RAG governance tests
 .\.venv\Scripts\python.exe -m unittest tests.test_rag_governance -v
 
+# RAG chunking Gold Set and SQLite tests
+.\.venv\Scripts\python.exe -m pytest tests\test_rag_chunking.py -q
+
+# Optional real PostgreSQL + pgvector integration test
+$env:DEV_AGENT_TEST_PGVECTOR='1'
+.\.venv\Scripts\python.exe -m pytest tests\test_rag_postgres_integration.py -q
+Remove-Item Env:DEV_AGENT_TEST_PGVECTOR -ErrorAction SilentlyContinue
+
 # Verify the Skill sandbox configuration
 .\.venv\Scripts\python.exe -c "from app.skills.sandbox import python_skill_sandbox_status; print(python_skill_sandbox_status())"
 ```
@@ -460,6 +474,12 @@ RAG 不再只是“切片后能检索”，而是按项目知识库治理的方�
 | Chunk Gold Set | Benchmark 可维护期望 chunk，计算 Chunk Hit、Recall@K、Precision@K 和 MRR。 |
 | Gold Set UI | Benchmark 页面支持新增、删除、加载 Gold Set，并直接用于 RAG Benchmark。 |
 
+### 文档切分
+
+RAG 入库采用按类型切分，并用 `tiktoken`（`cl100k_base`）统一限制 token 数和设置 overlap：Markdown 保留标题路径；Python 按 AST 类/方法边界切分；Java、TypeScript/TSX 按声明边界切分；其他文本递归兜底。child 块关联 parent 上下文；非代码文本以本地 token-hash 句间相似度启发式标记语义边界。切片元数据存于 `rag_chunk.metadata_json`，向量存于 PostgreSQL/pgvector 的 `rag_chunk.embedding vector(n)`。未配置可用 embedding API 时使用本地 hash fallback。
+
+切分 Gold Set 位于 `tests/data/rag_chunking_gold.json`，覆盖 Markdown、Java、Python 和部署文本，当前 Recall@3 为 1.00。真实 PostgreSQL 集成测试命令：`$env:DEV_AGENT_TEST_PGVECTOR='1'; .\.venv\Scripts\python.exe -m pytest tests\test_rag_postgres_integration.py -q`。测试使用随机 collection 并在结束时清理。最近验证：集成测试通过，全量测试 14 项通过。
+
 这让知识库从“能查”升级为“可版本化、可授权、可评测、可持续优化”。
 
 ## Skill 插件体系
@@ -577,6 +597,12 @@ docker compose -f docker-compose.pgvector.yml up -d
 .\.venv\Scripts\python.exe -m compileall -q app
 
 .\.venv\Scripts\python.exe -m unittest tests.test_memory_store tests.test_rag_governance -v
+
+.\.venv\Scripts\python.exe -m pytest tests\test_rag_chunking.py -q
+
+$env:DEV_AGENT_TEST_PGVECTOR='1'
+.\.venv\Scripts\python.exe -m pytest tests\test_rag_postgres_integration.py -q
+Remove-Item Env:DEV_AGENT_TEST_PGVECTOR -ErrorAction SilentlyContinue
 
 cd web
 npm run build

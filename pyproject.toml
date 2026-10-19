@@ -10,7 +10,8 @@ dependencies = [
     "langchain-core>=0.3.0",
     "pydantic>=2.8.0",
     "pydantic-settings>=2.4.0",
-    "python-multipart>=0.0.9"
+    "python-multipart>=0.0.9",
+    "tiktoken>=0.7.0"
 ]
 
 [project.optional-dependencies]

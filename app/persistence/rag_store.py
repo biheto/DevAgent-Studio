@@ -55,6 +55,7 @@ class SQLiteRagStore:
                     chunk_id TEXT NOT NULL,
                     path TEXT NOT NULL,
                     content TEXT NOT NULL,
+                    metadata_json TEXT NOT NULL DEFAULT '{}',
                     created_at TEXT NOT NULL
                 )
                 """
@@ -72,6 +73,8 @@ class SQLiteRagStore:
             chunk_columns = {row["name"] for row in conn.execute("PRAGMA table_info(rag_chunk)").fetchall()}
             if "document_version" not in chunk_columns:
                 conn.execute("ALTER TABLE rag_chunk ADD COLUMN document_version INTEGER NOT NULL DEFAULT 1")
+            if "metadata_json" not in chunk_columns:
+                conn.execute("ALTER TABLE rag_chunk ADD COLUMN metadata_json TEXT NOT NULL DEFAULT '{}'")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_rag_document_current ON rag_document(collection, path, is_current)")
             conn.execute(
                 """
@@ -90,7 +93,7 @@ class SQLiteRagStore:
                 """
             )
 
-    def ingest(self, collection: str, documents: list[dict[str, Any]], chunks: list[dict[str, str]]) -> dict[str, int]:
+    def ingest(self, collection: str, documents: list[dict[str, Any]], chunks: list[dict[str, Any]]) -> dict[str, int]:
         grouped = _group_chunks(chunks)
         changed_documents = 0
         with self._connection() as conn:
@@ -115,8 +118,8 @@ class SQLiteRagStore:
                 conn.execute("DELETE FROM rag_chunk WHERE collection = ? AND path = ? AND document_version = ?", (collection, path, version))
                 for chunk in grouped.get(path, []):
                     conn.execute(
-                        "INSERT INTO rag_chunk(collection, chunk_id, path, content, created_at, document_version) VALUES (?, ?, ?, ?, ?, ?)",
-                        (collection, chunk["chunk_id"], path, chunk["content"], utc_now_iso(), version),
+                        "INSERT INTO rag_chunk(collection, chunk_id, path, content, metadata_json, created_at, document_version) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                        (collection, chunk["chunk_id"], path, chunk["content"], json.dumps(chunk.get("metadata") or {}, ensure_ascii=False), utc_now_iso(), version),
                     )
         return {"document_count": len(documents), "chunk_count": len(chunks), "changed_document_count": changed_documents}
 
@@ -124,7 +127,7 @@ class SQLiteRagStore:
         with self._connection() as conn:
             rows = conn.execute(
                 """
-                SELECT c.chunk_id, c.path, c.content, d.acl_json
+                SELECT c.chunk_id, c.path, c.content, c.metadata_json, d.acl_json
                 FROM rag_chunk c JOIN rag_document d
                   ON c.collection = d.collection AND c.path = d.path AND c.document_version = d.version
                 WHERE c.collection = ? AND d.is_current = 1
@@ -132,7 +135,7 @@ class SQLiteRagStore:
                 (collection,),
             ).fetchall()
         visible = [
-            {"chunk_id": row["chunk_id"], "path": row["path"], "content": row["content"]}
+            {"chunk_id": row["chunk_id"], "path": row["path"], "content": row["content"], "metadata": _json_dict(row["metadata_json"])}
             for row in rows
             if _acl_allows(row["acl_json"], actor_id)
         ]
@@ -375,6 +378,7 @@ class PgVectorRagStore:
                         chunk_id TEXT NOT NULL,
                         path TEXT NOT NULL,
                         content TEXT NOT NULL,
+                        metadata_json JSONB NOT NULL DEFAULT '{{}}'::jsonb,
                         embedding vector({self.dimension}) NOT NULL,
                         embedding_source TEXT NOT NULL,
                         created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -397,6 +401,7 @@ class PgVectorRagStore:
                 cur.execute("ALTER TABLE rag_document ADD COLUMN IF NOT EXISTS valid_to TIMESTAMPTZ")
                 cur.execute("ALTER TABLE rag_document ADD COLUMN IF NOT EXISTS acl_json JSONB NOT NULL DEFAULT '[\"*\"]'::jsonb")
                 cur.execute("ALTER TABLE rag_chunk ADD COLUMN IF NOT EXISTS document_version INTEGER NOT NULL DEFAULT 1")
+                cur.execute("ALTER TABLE rag_chunk ADD COLUMN IF NOT EXISTS metadata_json JSONB NOT NULL DEFAULT '{}'::jsonb")
                 cur.execute("ALTER TABLE rag_document DROP CONSTRAINT IF EXISTS rag_document_collection_path_key")
                 cur.execute("ALTER TABLE rag_chunk DROP CONSTRAINT IF EXISTS rag_chunk_collection_chunk_id_key")
                 cur.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_rag_document_version ON rag_document(collection, path, version)")
@@ -419,10 +424,10 @@ class PgVectorRagStore:
                 )
             conn.commit()
 
-    def ingest(self, collection: str, documents: list[dict[str, Any]], chunks: list[dict[str, str]]) -> dict[str, int]:
+    def ingest(self, collection: str, documents: list[dict[str, Any]], chunks: list[dict[str, Any]]) -> dict[str, int]:
         grouped = _group_chunks(chunks)
         now = utc_now_iso()
-        changed_chunks: list[tuple[dict[str, str], int]] = []
+        changed_chunks: list[tuple[dict[str, Any], int]] = []
         changed_documents = 0
         with self._connect() as conn:
             with conn.cursor() as cur:
@@ -464,14 +469,15 @@ class PgVectorRagStore:
                 for (chunk, version), vector in zip(changed_chunks, vectors, strict=False):
                     cur.execute(
                         """
-                        INSERT INTO rag_chunk(collection, chunk_id, path, content, embedding, embedding_source, created_at, document_version)
-                        VALUES (%s, %s, %s, %s, %s::vector, %s, %s, %s)
+                        INSERT INTO rag_chunk(collection, chunk_id, path, content, metadata_json, embedding, embedding_source, created_at, document_version)
+                        VALUES (%s, %s, %s, %s, %s::jsonb, %s::vector, %s, %s, %s)
                         """,
                         (
                             collection,
                             chunk["chunk_id"],
                             chunk["path"],
                             chunk["content"],
+                            _json_text(chunk.get("metadata") or {}),
                             _vector_literal(vector),
                             self.embedding.source,
                             now,
@@ -487,7 +493,7 @@ class PgVectorRagStore:
             with conn.cursor() as cur:
                 cur.execute(
                     """
-                    SELECT c.chunk_id, c.path, c.content, 1 - (c.embedding <=> %s::vector) AS vector_score, d.acl_json
+                    SELECT c.chunk_id, c.path, c.content, c.metadata_json, 1 - (c.embedding <=> %s::vector) AS vector_score, d.acl_json
                     FROM rag_chunk c JOIN rag_document d
                       ON c.collection = d.collection AND c.path = d.path AND c.document_version = d.version
                     WHERE c.collection = %s AND d.is_current = TRUE
@@ -498,9 +504,9 @@ class PgVectorRagStore:
                 )
                 rows = cur.fetchall()
         visible = [
-            {"chunk_id": row[0], "path": row[1], "content": str(row[2]), "vector_score": float(row[3] or 0)}
+            {"chunk_id": row[0], "path": row[1], "content": str(row[2]), "metadata": _json_dict(row[3]), "vector_score": float(row[4] or 0)}
             for row in rows
-            if _acl_allows(_json_text(row[4]), actor_id)
+            if _acl_allows(_json_text(row[5]), actor_id)
         ]
         ranked = _rank_hybrid(question, visible, vector_score_key="vector_score")
         reranked = _rerank_candidates(question, ranked[: max(limit * 4, 20)])
@@ -772,15 +778,22 @@ def _slug(text: str) -> str:
     return slug or "note"
 
 
-def _group_chunks(chunks: list[dict[str, str]]) -> dict[str, list[dict[str, str]]]:
-    grouped: dict[str, list[dict[str, str]]] = {}
+def _group_chunks(chunks: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
+    grouped: dict[str, list[dict[str, Any]]] = {}
     for chunk in chunks:
         grouped.setdefault(str(chunk["path"]), []).append(chunk)
     return grouped
 
 
-def _content_hash(chunks: list[dict[str, str]]) -> str:
-    content = "\n".join(str(chunk.get("content") or "") for chunk in chunks)
+def _content_hash(chunks: list[dict[str, Any]]) -> str:
+    content = "\n".join(
+        json.dumps(
+            {"content": str(chunk.get("content") or ""), "metadata": chunk.get("metadata") or {}},
+            ensure_ascii=False,
+            sort_keys=True,
+        )
+        for chunk in chunks
+    )
     return hashlib.sha256(content.encode("utf-8", errors="ignore")).hexdigest()
 
 
@@ -887,6 +900,8 @@ def _rerank_candidates(question: str, candidates: list[dict[str, Any]]) -> list[
 
 
 def _public_rag_result(item: dict[str, Any]) -> dict[str, Any]:
+    metadata = dict(item.get("metadata") or {})
+    parent_content = str(metadata.pop("parent_content", "") or "")
     return {
         "chunk_id": item.get("chunk_id"),
         "path": item.get("path"),
@@ -896,6 +911,8 @@ def _public_rag_result(item: dict[str, Any]) -> dict[str, Any]:
         "rerank_score": item.get("rerank_score"),
         "retrieval_mode": item.get("retrieval_mode", "hybrid_bm25_token_rrf"),
         "content": str(item.get("content") or "")[:800],
+        "metadata": metadata,
+        "context_content": parent_content or str(item.get("content") or "")[:800],
     }
 
 

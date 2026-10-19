@@ -1,0 +1,26 @@
+{
+  "documents": [
+    {
+      "path": "docs/cache.md",
+      "content": "# Cache Design\n\nThe cache uses Redis with a 30 second ttl for hot product records.\n\n## Invalidation\n\nCache invalidation publishes product events through Kafka."
+    },
+    {
+      "path": "src/RetryPolicy.java",
+      "content": "package demo;\n\npublic class RetryPolicy {\n    public int calculateBackoff(int attempt) {\n        return attempt * 250;\n    }\n\n    public boolean shouldRetry(int statusCode) {\n        return statusCode == 503;\n    }\n}"
+    },
+    {
+      "path": "src/token_bucket.py",
+      "content": "class TokenBucket:\n    def __init__(self, capacity):\n        self.capacity = capacity\n\n    def consume(self, amount):\n        return self.capacity >= amount\n"
+    },
+    {
+      "path": "docs/deploy.txt",
+      "content": "The billing worker uses PostgreSQL advisory locks to prevent duplicate invoice generation during concurrent retries."
+    }
+  ],
+  "cases": [
+    {"case_id": "cache_kafka_invalidation", "question": "How does cache invalidation publish product events through Kafka?", "expected_paths": ["docs/cache.md"]},
+    {"case_id": "java_backoff", "question": "Where is RetryPolicy calculateBackoff attempt multiplied by 250?", "expected_paths": ["src/RetryPolicy.java"]},
+    {"case_id": "python_bucket", "question": "How does TokenBucket consume verify capacity amount?", "expected_paths": ["src/token_bucket.py"]},
+    {"case_id": "billing_lock", "question": "How does billing worker use PostgreSQL advisory locks for duplicate invoices?", "expected_paths": ["docs/deploy.txt"]}
+  ]
+}
