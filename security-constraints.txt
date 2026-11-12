@@ -1,0 +1,7 @@
+# Minimum patched versions recorded by the 2026-11-12 dependency audit.
+certifi>=2026.10.18
+filelock>=4.2.1
+langgraph-sdk>=0.4.6
+msgpack>=1.2.3
+urllib3>=2.8.0
+setuptools>=84.1.0

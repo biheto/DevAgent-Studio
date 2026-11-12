@@ -13,7 +13,7 @@ from app.persistence.sqlite_store import task_store
 class LLMProvider:
     def __init__(self):
         self.project_root = Path(__file__).resolve().parents[2]
-        self.env_path = self.project_root / ".env"
+        self.env_path = Path(os.getenv("APP_ENV_FILE", str(self.project_root / ".env")))
         self.default_model = "gpt-4o-mini"
         self.known_agents = [
             "planner",

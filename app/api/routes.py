@@ -276,14 +276,16 @@ def ingest_rag(request: RagIngestRequest) -> RagIngestResponse:
 
 @router.post("/rag/query", response_model=RagQueryResponse, tags=["RAG Knowledge Agent"])
 def query_rag(request: RagQueryRequest, x_devagent_actor: str = Header("local-user")) -> RagQueryResponse:
-    actor_id = request.actor_id or x_devagent_actor
+    from app.security import current_principal
+    actor_id = current_principal().actor_id
     results = rag_store.query(request.collection, request.question, request.limit, actor_id=actor_id)
     return RagQueryResponse(collection=request.collection, question=request.question, results=results)
 
 
 @router.get("/rag/documents", tags=["RAG Knowledge Agent"])
 def list_rag_documents(collection: str | None = None, x_devagent_actor: str = Header("local-user")) -> dict[str, object]:
-    return {"documents": rag_store.list_documents(collection, actor_id=x_devagent_actor)}
+    from app.security import current_principal
+    return {"documents": rag_store.list_documents(collection, actor_id=current_principal().actor_id)}
 
 
 @router.post("/rag/documents/acl", tags=["RAG Knowledge Agent"])
@@ -1130,6 +1132,8 @@ def list_memories(
     x_devagent_role: str | None = Header(default=None),
 ) -> list[dict[str, object]]:
     actor, role = _memory_actor(x_devagent_actor, x_devagent_role)
+    if scope == "user" and scope_id:
+        _authorize_memory(scope, scope_id, "list", actor, role)
     if scope in {"project", "team"}:
         _authorize_memory(scope, scope_id or "default", "list", actor, role)
     elif role != "admin":
@@ -1150,7 +1154,8 @@ def confirm_memory(
         raise HTTPException(status_code=404, detail="Memory not found")
     _authorize_memory(memory["scope"], memory["scope_id"], "confirm", x_devagent_actor, x_devagent_role)
     collection = request.collection or ("project-memory" if memory["scope"] == "project" else f"user-memory/{memory['scope_id']}")
-    saved = rag_store.add_note(collection, f"memory/{memory_id}", memory["content"])
+    principals = [memory["scope_id"]] if memory["scope"] == "user" else [f"{memory['scope']}:{memory['scope_id']}"]
+    saved = rag_store.add_note(collection, f"memory/{memory_id}", memory["content"], principals=principals)
     confirmed = memory_store.confirm(memory_id, saved["path"])
     if not confirmed:
         raise HTTPException(status_code=404, detail="Memory not found")
@@ -1192,21 +1197,14 @@ def delete_memory(
 
 
 def _memory_actor(actor: str | None, role: str | None) -> tuple[str, str]:
-    return (actor or "local-user", (role or "member").lower())
+    from app.security import current_principal
+    principal = current_principal()
+    return principal.actor_id, principal.role
 
 
 def _authorize_memory(scope: str, scope_id: str, action: str, actor: str | None, role: str | None) -> None:
-    actor_id, actor_role = _memory_actor(actor, role)
-    if scope == "user":
-        if actor_id != scope_id and actor_role != "admin":
-            raise HTTPException(status_code=403, detail="User memory is isolated by actor identity.")
-        return
-    if scope == "project" and actor_role not in {"editor", "admin"}:
-        raise HTTPException(status_code=403, detail="Project memory requires editor or admin role.")
-    if scope == "team" and action in {"confirm", "reject", "delete"} and actor_role != "admin":
-        raise HTTPException(status_code=403, detail="Team memory confirmation requires admin role.")
-    if scope not in {"user", "project", "team"}:
-        raise HTTPException(status_code=422, detail="Unknown memory scope.")
+    from app.security import authorize_scope
+    authorize_scope(scope, scope_id, action)
 
 
 @router.post("/learning/coach/chat", response_model=LearningChatResponse, tags=["Learning Coach Agent"])
@@ -1239,6 +1237,8 @@ def approve_task(task_id: str, request: HumanReviewRequest) -> HumanReviewRespon
 @router.post("/tasks/{task_id}/reject", response_model=HumanReviewResponse, tags=["Task Runtime"])
 def reject_task(task_id: str, request: HumanReviewRequest) -> HumanReviewResponse:
     checkpoint = _latest_resume_checkpoint(task_id)
+    if checkpoint and checkpoint.get("durable"):
+        return _resume_after_human_review(task_id, checkpoint, "rejected", request.comment)
     if checkpoint and _retry_pre_run_confirmation(task_id, checkpoint, "rejected", request.comment):
         return HumanReviewResponse(task_id=task_id, status="waiting_review", action="rejected", comment=request.comment)
     return _record_human_review(task_id, "rejected", "rejected", request.comment)
@@ -1529,6 +1529,11 @@ def _resume_after_human_review(
     action: str,
     comment: str | None,
 ) -> HumanReviewResponse:
+    if checkpoint.get("durable"):
+        import time
+        from app.harness.durable import load_run
+        if (load_run(str(checkpoint["run_id"]))["lease_until"] or 0) > time.time():
+            raise HTTPException(409, "Workflow is already executing.")
     task = task_store.get_task(task_id)
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
@@ -1579,7 +1584,8 @@ def _resume_after_human_review(
 
     public_result = result.get("result", {})
     final_report = str(result.get("final_report") or public_result.get("final_report") or "")
-    next_status = "waiting_review" if public_result.get("human_review_required") and public_result.get("human_review_packet") else "completed"
+    from app.harness.runtime import _resolve_task_status
+    next_status = _resolve_task_status(public_result)
     resume_events = [event for event in result.get("events", []) if event.get("task_id")]
     task_store.save_artifact(
         task_id,
@@ -1601,7 +1607,8 @@ def _resume_after_human_review(
         task_store.save_artifact(task_id, "workflow_checkpoint", "resume", public_result["resume_checkpoint"])
     task_store.update_task(task_id, next_status, final_report)
     for event in resume_events:
-        task_store.append_event(event)
+        if not event.get("persisted"):
+            task_store.append_event(event)
     task_store.append_event(
         {
             "event_id": f"evt_{uuid4().hex}",
@@ -1815,8 +1822,6 @@ def _learning_next_questions(request: LearningChatRequest, task: dict[str, objec
     )
     generated_questions = [line.strip("- 0123456789.、").strip() for line in result["text"].splitlines() if line.strip()]
     return {"questions": generated_questions[:3] or fallback_questions, "answer_source": result["answer_source"]}
-    questions = [line.strip("- 0123456789.、").strip() for line in text.splitlines() if line.strip()]
-    return questions[:3] or fallback_questions
 
 
 def _fallback_learning_next_questions(request: LearningChatRequest, task: dict[str, object] | None) -> list[str]:

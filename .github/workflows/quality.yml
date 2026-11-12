@@ -1,0 +1,46 @@
+name: quality
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: pgvector/pgvector:pg17
+        env:
+          POSTGRES_DB: iteration_test
+          POSTGRES_USER: iteration
+          POSTGRES_PASSWORD: iteration-test-only
+        ports:
+          - 15438:5432
+        options: >-
+          --health-cmd "pg_isready -U iteration -d iteration_test"
+          --health-interval 5s --health-timeout 5s --health-retries 20
+    env:
+      DEV_AGENT_TEST_PGVECTOR: "1"
+      PGVECTOR_DATABASE_URL: postgresql://iteration:iteration-test-only@127.0.0.1:15438/iteration_test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+      - run: python -m pip install --upgrade "pip>=26.2" "setuptools>=84.1.0"
+      - run: python -m pip install -c security-constraints.txt -e ".[dev,vector]"
+      - run: python scripts/verify_iteration.py -q
+      - run: python scripts/verify_iteration.py --rag-eval
+      - run: ruff check app tests --select E9,F63,F7,F82 --no-cache
+      - run: python -m pip install -c security-constraints.txt pip-audit && python -m pip_audit --skip-editable
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: npm ci --registry=https://registry.npmjs.org
+        working-directory: web
+      - run: npm run build
+        working-directory: web
+      - run: npm audit --audit-level=high --registry=https://registry.npmjs.org
+        working-directory: web

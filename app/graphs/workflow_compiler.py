@@ -5,6 +5,9 @@ from typing import Annotated, Any, TypedDict
 from uuid import uuid4
 
 from langgraph.graph import END, StateGraph
+from langgraph.types import interrupt
+from langgraph.errors import GraphInterrupt
+from app.harness.durable import execute_graph, execute_operation, load_run
 
 from app.agents.code_review_tools import review_single_file
 from app.graphs.project_analyzer_graph import project_analyzer_graph
@@ -35,6 +38,7 @@ class WorkflowState(TypedDict, total=False):
     max_files: int
     require_human_review: bool
     task_id: str
+    durable_run_id: str
     current: Annotated[str, _take_latest]
     events: Annotated[list[dict[str, Any]], _append_list]
     outputs: Annotated[dict[str, Any], _merge_dict]
@@ -62,6 +66,7 @@ def compile_workflow_graph(
     nodes: list[dict[str, Any]],
     edges: list[dict[str, Any]] | None = None,
     entry_node_id: str | None = None,
+    checkpointer=None,
 ):
     normalized_nodes = _normalize_nodes(nodes)
     normalized_edges = _normalize_edges(normalized_nodes, edges or [])
@@ -89,7 +94,7 @@ def compile_workflow_graph(
             graph.add_conditional_edges(source, _edge_router(source, candidates), path_map)
         else:
             graph.add_edge(source, END)
-    return graph.compile()
+    return graph.compile(checkpointer=checkpointer)
 
 
 def run_compiled_workflow(
@@ -126,7 +131,14 @@ def run_compiled_workflow(
         else:
             initial_state["current"] = extra_state.get("input_text") or extra_state.get("goal") or input_text
 
-    result = graph.invoke(initial_state)
+    if initial_state.get("task_id"):
+        definition = {"workflow_name": workflow_name, "nodes": normalized_nodes, "edges": normalized_edges}
+        result = execute_graph(
+            lambda saver: compile_workflow_graph(workflow_name, normalized_nodes, normalized_edges, checkpointer=saver),
+            definition, initial_state, (extra_state or {}).get("durable_action"),
+        )
+    else:
+        result = graph.invoke(initial_state)
     final_report = result.get("final_report") or _build_final_report(result)
     resume_checkpoint = _build_resume_checkpoint(
         workflow_name,
@@ -148,7 +160,9 @@ def run_compiled_workflow(
         "human_review_packet": result.get("human_review_packet"),
         "validation": validation,
         "outputs": result.get("outputs", {}),
-        "resume_checkpoint": resume_checkpoint,
+        "resume_checkpoint": result.get("durable_checkpoint") or resume_checkpoint,
+        "execution_status": result.get("execution_status"),
+        "execution_error": result.get("execution_error"),
     }
 
 
@@ -159,6 +173,8 @@ def run_task_workflow(input_state: dict[str, Any]) -> dict[str, Any]:
     edges = input_state.get("edges") or []
     result = run_compiled_workflow(workflow_name, input_text, nodes, edges, input_state)
     public_result = {
+        "execution_status": result.get("execution_status"),
+        "execution_error": result.get("execution_error"),
         "goal": input_state.get("goal") or input_text,
         "workflow_name": workflow_name,
         "final_report": result["final_report"],
@@ -179,6 +195,9 @@ def run_task_workflow(input_state: dict[str, Any]) -> dict[str, Any]:
 
 
 def resume_task_workflow(checkpoint: dict[str, Any], action: str = "approved", comment: str | None = None) -> dict[str, Any]:
+    if checkpoint.get("durable"):
+        stored = load_run(str(checkpoint["run_id"]))
+        return run_task_workflow({**stored["input"], **stored["definition"], "durable_action": action, "review_comment": comment})
     workflow_name = str(checkpoint.get("workflow_name") or "visual_task_workflow")
     input_text = str(checkpoint.get("input_text") or checkpoint.get("goal") or "")
     paused_node_id = str(checkpoint.get("paused_node_id") or "")
@@ -368,6 +387,11 @@ def validate_workflow_definition(nodes: list[dict[str, Any]], edges: list[dict[s
 def _node_runner(node: dict[str, Any], nodes: list[dict[str, Any]], edges: list[dict[str, Any]]):
     def run(state: WorkflowState) -> WorkflowState:
         config = node.get("config", {}) if isinstance(node.get("config"), dict) else {}
+        if state.get("durable_run_id") and (config.get("confirm_before_run") or node.get("type") == "human_review"):
+            decision = interrupt(_confirmation_packet(node, state, state.get("outputs", {})))
+            if decision not in {"approved", "approve"}:
+                return {"pause_workflow": True, "events": [_event(state, node, "cancelled", "Human review rejected execution.")]}
+            state = {**state, "human_approvals": {**state.get("human_approvals", {}), node["id"]: "approved"}}
         start_event = _event(state, node, "running", f"{_node_name(node)} started")
         outputs = dict(state.get("outputs", {}))
         if config.get("confirm_before_run") and not _confirmation_is_approved(state, node):
@@ -379,16 +403,18 @@ def _node_runner(node: dict[str, Any], nodes: list[dict[str, Any]], edges: list[
                 "human_review_packet": packet,
                 "pause_workflow": True,
             }
-        attempts = max(1, int(config.get("retry_count") or 0) + 1)
+        attempts = min(6, max(1, int(config.get("retry_count") or 0) + 1))
         retry_events: list[dict[str, Any]] = []
         try:
             for attempt in range(1, attempts + 1):
                 try:
                     node_state = _state_with_mapped_input(state, node, outputs)
-                    output, extra = _execute_node(node, node_state, outputs)
+                    output, extra = execute_operation(node, node_state, outputs, lambda: _execute_node(node, node_state, outputs))
                     break
+                except GraphInterrupt:
+                    raise
                 except Exception as exc:
-                    if attempt >= attempts:
+                    if attempt >= attempts or not isinstance(exc, (TimeoutError, ConnectionError)):
                         raise
                     retry_events.append(
                         _event(
@@ -400,6 +426,9 @@ def _node_runner(node: dict[str, Any], nodes: list[dict[str, Any]], edges: list[
                         )
                     )
         except Exception as exc:
+            if state.get("durable_run_id") and config.get("fail_strategy", "halt") != "continue":
+                _event(state, node, "failed", str(exc))
+                raise
             update: WorkflowState = {
                 "events": [start_event, *retry_events, _event(state, node, "failed", str(exc))],
                 "outputs": {_output_key(node): {"error": str(exc), "status": "failed"}},
@@ -823,7 +852,7 @@ def _event(
     data: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     task_id = state.get("task_id") or "workflow_preview"
-    return {
+    event = {
         "task_id": task_id,
         "event_id": f"evt_{task_id}_{node['id']}_{uuid4().hex[:8]}",
         "type": "workflow_node",
@@ -839,6 +868,11 @@ def _event(
             **(data or {}),
         },
     }
+    if state.get("durable_run_id"):
+        from app.persistence.sqlite_store import task_store
+        task_store.append_event(event)
+        event["persisted"] = True
+    return event
 
 
 def _agent_output(node: dict[str, Any], agent: str, content: str) -> dict[str, str]:

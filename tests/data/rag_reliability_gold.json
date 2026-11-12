@@ -1,0 +1,1008 @@
+{
+  "schema_version": 1,
+  "provenance": "Assistant-curated bilingual synthetic regression corpus, not human-labeled production traffic or a general semantic-quality benchmark.",
+  "documents": [
+    {
+      "path": "fixtures/run_lease.md",
+      "content": "run_lease owns a renewable execution lease. Lease expiry permits crash recovery; concurrent workers are rejected. 执行租约防止并发恢复。",
+      "acl": [
+        "alice"
+      ]
+    },
+    {
+      "path": "fixtures/execute_operation.md",
+      "content": "execute_operation journals tool results. An uncertain side effect blocks automatic replay until operator reconciliation. 不确定副作用需要人工核对。",
+      "acl": [
+        "alice"
+      ]
+    },
+    {
+      "path": "fixtures/SqliteSaver.md",
+      "content": "SqliteSaver persists graph checkpoints to disk across process restarts. sync durability saves graph progress before advancing. 持久化检查点。",
+      "acl": [
+        "alice"
+      ]
+    },
+    {
+      "path": "fixtures/interrupt.md",
+      "content": "interrupt suspends a human review node. Command resume supplies an approval decision without rerunning completed predecessors. 人工审核中断。",
+      "acl": [
+        "alice"
+      ]
+    },
+    {
+      "path": "fixtures/IdentityStore.md",
+      "content": "IdentityStore hashes generated bearer tokens using SHA256. Credentials resolve a server-owned actor and role. 身份不能由请求头自行声明。",
+      "acl": [
+        "alice"
+      ]
+    },
+    {
+      "path": "fixtures/authorize_scope.md",
+      "content": "authorize_scope checks owner identity and stored team membership. A team editor cannot confirm team governance records. 项目权限校验。",
+      "acl": [
+        "alice"
+      ]
+    },
+    {
+      "path": "fixtures/lexical_recall.md",
+      "content": "lexical_recall uses a PostgreSQL full-text GIN index and websearch_to_tsquery. This branch independently finds exact identifiers. 独立词法召回。",
+      "acl": [
+        "alice"
+      ]
+    },
+    {
+      "path": "fixtures/vector_recall.md",
+      "content": "vector_recall orders pgvector cosine distances. Access-control predicates run before LIMIT so inaccessible candidates do not consume the shortlist. 向量候选权限前置。",
+      "acl": [
+        "alice"
+      ]
+    },
+    {
+      "path": "fixtures/chunk_markdown.md",
+      "content": "chunk_markdown preserves heading paths and links child chunks to parent context. Markdown section boundaries improve source navigation. Markdown 分段。",
+      "acl": [
+        "alice"
+      ]
+    },
+    {
+      "path": "fixtures/content_hash.md",
+      "content": "content_hash detects unchanged documents during ingestion. Changed files create a new document version without rebuilding unchanged inputs. 增量入库。",
+      "acl": [
+        "alice"
+      ]
+    },
+    {
+      "path": "fixtures/retry_policy.md",
+      "content": "retry_policy bounds transient TimeoutError and ConnectionError retries. PermissionError and validation failures are not retried. 有限重试。",
+      "acl": [
+        "*"
+      ]
+    },
+    {
+      "path": "fixtures/price_outbox.md",
+      "content": "price_outbox records a pending price event in the same database transaction as its snapshot. Broker outages leave work for periodic compensation. 事务消息。",
+      "acl": [
+        "*"
+      ]
+    },
+    {
+      "path": "fixtures/snapshot_receipt.md",
+      "content": "snapshot_receipt has a composite unique key of snapshot_id and monitor_id. Concurrent duplicate deliveries produce only one price check. 价格事件幂等。",
+      "acl": [
+        "*"
+      ]
+    },
+    {
+      "path": "fixtures/eligible_snapshot.md",
+      "content": "eligible_snapshot checks SKU, owner, confirmation, region and membership. Pending price anomalies cannot trigger notifications. 价格证据筛选。",
+      "acl": [
+        "*"
+      ]
+    },
+    {
+      "path": "fixtures/render_explanations.md",
+      "content": "render_explanations accepts candidate indexes and evidence IDs in an exact JSON schema. Unknown fields and ungrounded prose are rejected. 解释证据校验。",
+      "acl": [
+        "*"
+      ]
+    },
+    {
+      "path": "fixtures/publisher_confirm.md",
+      "content": "publisher_confirm waits for broker acceptance before acknowledging the original retry event. Consumer acknowledgements are a separate guarantee. 消息确认。",
+      "acl": [
+        "*"
+      ]
+    },
+    {
+      "path": "fixtures/notification_lease.md",
+      "content": "notification_lease claims a durable delivery job until its lease expires. Failed external delivery can be retried while the in-app record remains durable. 通知投递租约。",
+      "acl": [
+        "*"
+      ]
+    },
+    {
+      "path": "fixtures/RRF.md",
+      "content": "RRF fuses ranked lexical and semantic candidates. Recall@K and MRR evaluate coverage and the first relevant result position. 检索排名融合。",
+      "acl": [
+        "*"
+      ]
+    },
+    {
+      "path": "fixtures/no_answer.md",
+      "content": "no_answer abstains when neither lexical overlap nor semantic evidence clears the relevance threshold. Empty input is not a request to dump documents. 无答案拒答。",
+      "acl": [
+        "*"
+      ]
+    },
+    {
+      "path": "fixtures/reconciliation_audit.md",
+      "content": "reconciliation_audit records an operator, verified outcome and reason for an uncertain operation. Completed receipts can be supplied to avoid repeating the external action. 核对审计。",
+      "acl": [
+        "*"
+      ]
+    }
+  ],
+  "cases": [
+    {
+      "id": "run_lease_0",
+      "question": "run_lease",
+      "actor_id": "alice",
+      "expected_paths": [
+        "fixtures/run_lease.md"
+      ],
+      "category": "symbol"
+    },
+    {
+      "id": "run_lease_1",
+      "question": "Which lease rejects concurrent workers?",
+      "actor_id": "alice",
+      "expected_paths": [
+        "fixtures/run_lease.md"
+      ],
+      "category": "paraphrase"
+    },
+    {
+      "id": "run_lease_2",
+      "question": "执行租约 run_lease 如何防止重复运行？",
+      "actor_id": "alice",
+      "expected_paths": [
+        "fixtures/run_lease.md"
+      ],
+      "category": "bilingual"
+    },
+    {
+      "id": "run_lease_3",
+      "question": "How can lease expiry permit crash recovery?",
+      "actor_id": "alice",
+      "expected_paths": [
+        "fixtures/run_lease.md"
+      ],
+      "category": "behavior"
+    },
+    {
+      "id": "execute_operation_0",
+      "question": "execute_operation",
+      "actor_id": "alice",
+      "expected_paths": [
+        "fixtures/execute_operation.md"
+      ],
+      "category": "symbol"
+    },
+    {
+      "id": "execute_operation_1",
+      "question": "What blocks uncertain side effect replay?",
+      "actor_id": "alice",
+      "expected_paths": [
+        "fixtures/execute_operation.md"
+      ],
+      "category": "paraphrase"
+    },
+    {
+      "id": "execute_operation_2",
+      "question": "工具 execute_operation 如何记录执行结果？",
+      "actor_id": "alice",
+      "expected_paths": [
+        "fixtures/execute_operation.md"
+      ],
+      "category": "bilingual"
+    },
+    {
+      "id": "execute_operation_3",
+      "question": "Where is operator reconciliation required?",
+      "actor_id": "alice",
+      "expected_paths": [
+        "fixtures/execute_operation.md"
+      ],
+      "category": "behavior"
+    },
+    {
+      "id": "SqliteSaver_0",
+      "question": "SqliteSaver",
+      "actor_id": "alice",
+      "expected_paths": [
+        "fixtures/SqliteSaver.md"
+      ],
+      "category": "symbol"
+    },
+    {
+      "id": "SqliteSaver_1",
+      "question": "What persists checkpoints across process restarts?",
+      "actor_id": "alice",
+      "expected_paths": [
+        "fixtures/SqliteSaver.md"
+      ],
+      "category": "paraphrase"
+    },
+    {
+      "id": "SqliteSaver_2",
+      "question": "持久化 SqliteSaver 有什么作用？",
+      "actor_id": "alice",
+      "expected_paths": [
+        "fixtures/SqliteSaver.md"
+      ],
+      "category": "bilingual"
+    },
+    {
+      "id": "SqliteSaver_3",
+      "question": "Where is sync durability described?",
+      "actor_id": "alice",
+      "expected_paths": [
+        "fixtures/SqliteSaver.md"
+      ],
+      "category": "behavior"
+    },
+    {
+      "id": "interrupt_0",
+      "question": "interrupt",
+      "actor_id": "alice",
+      "expected_paths": [
+        "fixtures/interrupt.md"
+      ],
+      "category": "symbol"
+    },
+    {
+      "id": "interrupt_1",
+      "question": "How does Command resume supply approval?",
+      "actor_id": "alice",
+      "expected_paths": [
+        "fixtures/interrupt.md"
+      ],
+      "category": "paraphrase"
+    },
+    {
+      "id": "interrupt_2",
+      "question": "人工审核 interrupt 如何暂停？",
+      "actor_id": "alice",
+      "expected_paths": [
+        "fixtures/interrupt.md"
+      ],
+      "category": "bilingual"
+    },
+    {
+      "id": "interrupt_3",
+      "question": "What avoids rerunning completed predecessors?",
+      "actor_id": "alice",
+      "expected_paths": [
+        "fixtures/interrupt.md"
+      ],
+      "category": "behavior"
+    },
+    {
+      "id": "IdentityStore_0",
+      "question": "IdentityStore",
+      "actor_id": "alice",
+      "expected_paths": [
+        "fixtures/IdentityStore.md"
+      ],
+      "category": "symbol"
+    },
+    {
+      "id": "IdentityStore_1",
+      "question": "Where are bearer tokens hashed?",
+      "actor_id": "alice",
+      "expected_paths": [
+        "fixtures/IdentityStore.md"
+      ],
+      "category": "paraphrase"
+    },
+    {
+      "id": "IdentityStore_2",
+      "question": "身份 IdentityStore 如何校验？",
+      "actor_id": "alice",
+      "expected_paths": [
+        "fixtures/IdentityStore.md"
+      ],
+      "category": "bilingual"
+    },
+    {
+      "id": "IdentityStore_3",
+      "question": "What resolves server-owned actor credentials?",
+      "actor_id": "alice",
+      "expected_paths": [
+        "fixtures/IdentityStore.md"
+      ],
+      "category": "behavior"
+    },
+    {
+      "id": "authorize_scope_0",
+      "question": "authorize_scope",
+      "actor_id": "alice",
+      "expected_paths": [
+        "fixtures/authorize_scope.md"
+      ],
+      "category": "symbol"
+    },
+    {
+      "id": "authorize_scope_1",
+      "question": "What checks stored team membership?",
+      "actor_id": "alice",
+      "expected_paths": [
+        "fixtures/authorize_scope.md"
+      ],
+      "category": "paraphrase"
+    },
+    {
+      "id": "authorize_scope_2",
+      "question": "权限 authorize_scope 如何检查？",
+      "actor_id": "alice",
+      "expected_paths": [
+        "fixtures/authorize_scope.md"
+      ],
+      "category": "bilingual"
+    },
+    {
+      "id": "authorize_scope_3",
+      "question": "Why cannot a team editor confirm governance records?",
+      "actor_id": "alice",
+      "expected_paths": [
+        "fixtures/authorize_scope.md"
+      ],
+      "category": "behavior"
+    },
+    {
+      "id": "lexical_recall_0",
+      "question": "lexical_recall",
+      "actor_id": "alice",
+      "expected_paths": [
+        "fixtures/lexical_recall.md"
+      ],
+      "category": "symbol"
+    },
+    {
+      "id": "lexical_recall_1",
+      "question": "Which branch finds exact identifiers independently?",
+      "actor_id": "alice",
+      "expected_paths": [
+        "fixtures/lexical_recall.md"
+      ],
+      "category": "paraphrase"
+    },
+    {
+      "id": "lexical_recall_2",
+      "question": "词法 lexical_recall 如何召回？",
+      "actor_id": "alice",
+      "expected_paths": [
+        "fixtures/lexical_recall.md"
+      ],
+      "category": "bilingual"
+    },
+    {
+      "id": "lexical_recall_3",
+      "question": "Where is websearch_to_tsquery used?",
+      "actor_id": "alice",
+      "expected_paths": [
+        "fixtures/lexical_recall.md"
+      ],
+      "category": "behavior"
+    },
+    {
+      "id": "vector_recall_0",
+      "question": "vector_recall",
+      "actor_id": "alice",
+      "expected_paths": [
+        "fixtures/vector_recall.md"
+      ],
+      "category": "symbol"
+    },
+    {
+      "id": "vector_recall_1",
+      "question": "Where are cosine distances ordered?",
+      "actor_id": "alice",
+      "expected_paths": [
+        "fixtures/vector_recall.md"
+      ],
+      "category": "paraphrase"
+    },
+    {
+      "id": "vector_recall_2",
+      "question": "向量 vector_recall 的权限何时过滤？",
+      "actor_id": "alice",
+      "expected_paths": [
+        "fixtures/vector_recall.md"
+      ],
+      "category": "bilingual"
+    },
+    {
+      "id": "vector_recall_3",
+      "question": "What prevents inaccessible candidates consuming the shortlist?",
+      "actor_id": "alice",
+      "expected_paths": [
+        "fixtures/vector_recall.md"
+      ],
+      "category": "behavior"
+    },
+    {
+      "id": "chunk_markdown_0",
+      "question": "chunk_markdown",
+      "actor_id": "alice",
+      "expected_paths": [
+        "fixtures/chunk_markdown.md"
+      ],
+      "category": "symbol"
+    },
+    {
+      "id": "chunk_markdown_1",
+      "question": "What preserves heading paths?",
+      "actor_id": "alice",
+      "expected_paths": [
+        "fixtures/chunk_markdown.md"
+      ],
+      "category": "paraphrase"
+    },
+    {
+      "id": "chunk_markdown_2",
+      "question": "分段 chunk_markdown 如何保留来源？",
+      "actor_id": "alice",
+      "expected_paths": [
+        "fixtures/chunk_markdown.md"
+      ],
+      "category": "bilingual"
+    },
+    {
+      "id": "chunk_markdown_3",
+      "question": "Where are child chunks linked to parent context?",
+      "actor_id": "alice",
+      "expected_paths": [
+        "fixtures/chunk_markdown.md"
+      ],
+      "category": "behavior"
+    },
+    {
+      "id": "content_hash_0",
+      "question": "content_hash",
+      "actor_id": "alice",
+      "expected_paths": [
+        "fixtures/content_hash.md"
+      ],
+      "category": "symbol"
+    },
+    {
+      "id": "content_hash_1",
+      "question": "How are unchanged documents detected?",
+      "actor_id": "alice",
+      "expected_paths": [
+        "fixtures/content_hash.md"
+      ],
+      "category": "paraphrase"
+    },
+    {
+      "id": "content_hash_2",
+      "question": "增量 content_hash 如何判断变化？",
+      "actor_id": "alice",
+      "expected_paths": [
+        "fixtures/content_hash.md"
+      ],
+      "category": "bilingual"
+    },
+    {
+      "id": "content_hash_3",
+      "question": "What creates a new document version?",
+      "actor_id": "alice",
+      "expected_paths": [
+        "fixtures/content_hash.md"
+      ],
+      "category": "behavior"
+    },
+    {
+      "id": "retry_policy_0",
+      "question": "retry_policy",
+      "actor_id": "alice",
+      "expected_paths": [
+        "fixtures/retry_policy.md"
+      ],
+      "category": "symbol"
+    },
+    {
+      "id": "retry_policy_1",
+      "question": "Which errors are eligible for transient retries?",
+      "actor_id": "alice",
+      "expected_paths": [
+        "fixtures/retry_policy.md"
+      ],
+      "category": "paraphrase"
+    },
+    {
+      "id": "retry_policy_2",
+      "question": "重试 retry_policy 是否处理 PermissionError？",
+      "actor_id": "alice",
+      "expected_paths": [
+        "fixtures/retry_policy.md"
+      ],
+      "category": "bilingual"
+    },
+    {
+      "id": "retry_policy_3",
+      "question": "What bounds ConnectionError retry attempts?",
+      "actor_id": "alice",
+      "expected_paths": [
+        "fixtures/retry_policy.md"
+      ],
+      "category": "behavior"
+    },
+    {
+      "id": "price_outbox_0",
+      "question": "price_outbox",
+      "actor_id": "alice",
+      "expected_paths": [
+        "fixtures/price_outbox.md"
+      ],
+      "category": "symbol"
+    },
+    {
+      "id": "price_outbox_1",
+      "question": "What records pending price events atomically?",
+      "actor_id": "alice",
+      "expected_paths": [
+        "fixtures/price_outbox.md"
+      ],
+      "category": "paraphrase"
+    },
+    {
+      "id": "price_outbox_2",
+      "question": "事务 price_outbox 如何补偿？",
+      "actor_id": "alice",
+      "expected_paths": [
+        "fixtures/price_outbox.md"
+      ],
+      "category": "bilingual"
+    },
+    {
+      "id": "price_outbox_3",
+      "question": "Where does a broker outage leave pending work?",
+      "actor_id": "alice",
+      "expected_paths": [
+        "fixtures/price_outbox.md"
+      ],
+      "category": "behavior"
+    },
+    {
+      "id": "snapshot_receipt_0",
+      "question": "snapshot_receipt",
+      "actor_id": "alice",
+      "expected_paths": [
+        "fixtures/snapshot_receipt.md"
+      ],
+      "category": "symbol"
+    },
+    {
+      "id": "snapshot_receipt_1",
+      "question": "Which composite key deduplicates price checks?",
+      "actor_id": "alice",
+      "expected_paths": [
+        "fixtures/snapshot_receipt.md"
+      ],
+      "category": "paraphrase"
+    },
+    {
+      "id": "snapshot_receipt_2",
+      "question": "幂等 snapshot_receipt 如何实现？",
+      "actor_id": "alice",
+      "expected_paths": [
+        "fixtures/snapshot_receipt.md"
+      ],
+      "category": "bilingual"
+    },
+    {
+      "id": "snapshot_receipt_3",
+      "question": "What prevents concurrent duplicate deliveries?",
+      "actor_id": "alice",
+      "expected_paths": [
+        "fixtures/snapshot_receipt.md"
+      ],
+      "category": "behavior"
+    },
+    {
+      "id": "eligible_snapshot_0",
+      "question": "eligible_snapshot",
+      "actor_id": "alice",
+      "expected_paths": [
+        "fixtures/eligible_snapshot.md"
+      ],
+      "category": "symbol"
+    },
+    {
+      "id": "eligible_snapshot_1",
+      "question": "What checks SKU and owner eligibility?",
+      "actor_id": "alice",
+      "expected_paths": [
+        "fixtures/eligible_snapshot.md"
+      ],
+      "category": "paraphrase"
+    },
+    {
+      "id": "eligible_snapshot_2",
+      "question": "价格 eligible_snapshot 如何确认？",
+      "actor_id": "alice",
+      "expected_paths": [
+        "fixtures/eligible_snapshot.md"
+      ],
+      "category": "bilingual"
+    },
+    {
+      "id": "eligible_snapshot_3",
+      "question": "Which policy rejects pending price anomalies?",
+      "actor_id": "alice",
+      "expected_paths": [
+        "fixtures/eligible_snapshot.md"
+      ],
+      "category": "behavior"
+    },
+    {
+      "id": "render_explanations_0",
+      "question": "render_explanations",
+      "actor_id": "alice",
+      "expected_paths": [
+        "fixtures/render_explanations.md"
+      ],
+      "category": "symbol"
+    },
+    {
+      "id": "render_explanations_1",
+      "question": "What rejects ungrounded prose?",
+      "actor_id": "alice",
+      "expected_paths": [
+        "fixtures/render_explanations.md"
+      ],
+      "category": "paraphrase"
+    },
+    {
+      "id": "render_explanations_2",
+      "question": "解释 render_explanations 如何校验？",
+      "actor_id": "alice",
+      "expected_paths": [
+        "fixtures/render_explanations.md"
+      ],
+      "category": "bilingual"
+    },
+    {
+      "id": "render_explanations_3",
+      "question": "Where are candidate indexes and evidence IDs validated?",
+      "actor_id": "alice",
+      "expected_paths": [
+        "fixtures/render_explanations.md"
+      ],
+      "category": "behavior"
+    },
+    {
+      "id": "publisher_confirm_0",
+      "question": "publisher_confirm",
+      "actor_id": "alice",
+      "expected_paths": [
+        "fixtures/publisher_confirm.md"
+      ],
+      "category": "symbol"
+    },
+    {
+      "id": "publisher_confirm_1",
+      "question": "What waits for broker acceptance?",
+      "actor_id": "alice",
+      "expected_paths": [
+        "fixtures/publisher_confirm.md"
+      ],
+      "category": "paraphrase"
+    },
+    {
+      "id": "publisher_confirm_2",
+      "question": "消息 publisher_confirm 如何确认？",
+      "actor_id": "alice",
+      "expected_paths": [
+        "fixtures/publisher_confirm.md"
+      ],
+      "category": "bilingual"
+    },
+    {
+      "id": "publisher_confirm_3",
+      "question": "Why are consumer acknowledgements a separate guarantee?",
+      "actor_id": "alice",
+      "expected_paths": [
+        "fixtures/publisher_confirm.md"
+      ],
+      "category": "behavior"
+    },
+    {
+      "id": "notification_lease_0",
+      "question": "notification_lease",
+      "actor_id": "alice",
+      "expected_paths": [
+        "fixtures/notification_lease.md"
+      ],
+      "category": "symbol"
+    },
+    {
+      "id": "notification_lease_1",
+      "question": "What claims durable delivery jobs?",
+      "actor_id": "alice",
+      "expected_paths": [
+        "fixtures/notification_lease.md"
+      ],
+      "category": "paraphrase"
+    },
+    {
+      "id": "notification_lease_2",
+      "question": "通知 notification_lease 如何恢复？",
+      "actor_id": "alice",
+      "expected_paths": [
+        "fixtures/notification_lease.md"
+      ],
+      "category": "bilingual"
+    },
+    {
+      "id": "notification_lease_3",
+      "question": "Where does the in-app record remain durable during failed delivery?",
+      "actor_id": "alice",
+      "expected_paths": [
+        "fixtures/notification_lease.md"
+      ],
+      "category": "behavior"
+    },
+    {
+      "id": "RRF_0",
+      "question": "RRF",
+      "actor_id": "alice",
+      "expected_paths": [
+        "fixtures/RRF.md"
+      ],
+      "category": "symbol"
+    },
+    {
+      "id": "RRF_1",
+      "question": "What fuses lexical and semantic candidates?",
+      "actor_id": "alice",
+      "expected_paths": [
+        "fixtures/RRF.md"
+      ],
+      "category": "paraphrase"
+    },
+    {
+      "id": "RRF_2",
+      "question": "融合 RRF 有什么作用？",
+      "actor_id": "alice",
+      "expected_paths": [
+        "fixtures/RRF.md"
+      ],
+      "category": "bilingual"
+    },
+    {
+      "id": "RRF_3",
+      "question": "Which metrics evaluate the first relevant result position?",
+      "actor_id": "alice",
+      "expected_paths": [
+        "fixtures/RRF.md"
+      ],
+      "category": "behavior"
+    },
+    {
+      "id": "no_answer_0",
+      "question": "no_answer",
+      "actor_id": "alice",
+      "expected_paths": [
+        "fixtures/no_answer.md"
+      ],
+      "category": "symbol"
+    },
+    {
+      "id": "no_answer_1",
+      "question": "What happens below the relevance threshold?",
+      "actor_id": "alice",
+      "expected_paths": [
+        "fixtures/no_answer.md"
+      ],
+      "category": "paraphrase"
+    },
+    {
+      "id": "no_answer_2",
+      "question": "拒答 no_answer 如何处理？",
+      "actor_id": "alice",
+      "expected_paths": [
+        "fixtures/no_answer.md"
+      ],
+      "category": "bilingual"
+    },
+    {
+      "id": "no_answer_3",
+      "question": "Why must empty input not dump documents?",
+      "actor_id": "alice",
+      "expected_paths": [
+        "fixtures/no_answer.md"
+      ],
+      "category": "behavior"
+    },
+    {
+      "id": "reconciliation_audit_0",
+      "question": "reconciliation_audit",
+      "actor_id": "alice",
+      "expected_paths": [
+        "fixtures/reconciliation_audit.md"
+      ],
+      "category": "symbol"
+    },
+    {
+      "id": "reconciliation_audit_1",
+      "question": "What records verified outcome and operator reason?",
+      "actor_id": "alice",
+      "expected_paths": [
+        "fixtures/reconciliation_audit.md"
+      ],
+      "category": "paraphrase"
+    },
+    {
+      "id": "reconciliation_audit_2",
+      "question": "审计 reconciliation_audit 保存什么？",
+      "actor_id": "alice",
+      "expected_paths": [
+        "fixtures/reconciliation_audit.md"
+      ],
+      "category": "bilingual"
+    },
+    {
+      "id": "reconciliation_audit_3",
+      "question": "How can completed receipts avoid repeating external action?",
+      "actor_id": "alice",
+      "expected_paths": [
+        "fixtures/reconciliation_audit.md"
+      ],
+      "category": "behavior"
+    },
+    {
+      "id": "noanswer_0",
+      "question": "photosynthesis chlorophyll",
+      "actor_id": "alice",
+      "expected_paths": [],
+      "category": "no_answer"
+    },
+    {
+      "id": "noanswer_1",
+      "question": "volcanology magma",
+      "actor_id": "alice",
+      "expected_paths": [],
+      "category": "no_answer"
+    },
+    {
+      "id": "noanswer_2",
+      "question": "quasar astronomy",
+      "actor_id": "alice",
+      "expected_paths": [],
+      "category": "no_answer"
+    },
+    {
+      "id": "noanswer_3",
+      "question": "dinosaur paleontology",
+      "actor_id": "alice",
+      "expected_paths": [],
+      "category": "no_answer"
+    },
+    {
+      "id": "noanswer_4",
+      "question": "marine plankton",
+      "actor_id": "alice",
+      "expected_paths": [],
+      "category": "no_answer"
+    },
+    {
+      "id": "noanswer_5",
+      "question": "renaissance fresco",
+      "actor_id": "alice",
+      "expected_paths": [],
+      "category": "no_answer"
+    },
+    {
+      "id": "noanswer_6",
+      "question": "gastronomy soufflé",
+      "actor_id": "alice",
+      "expected_paths": [],
+      "category": "no_answer"
+    },
+    {
+      "id": "noanswer_7",
+      "question": "quantum entanglement",
+      "actor_id": "alice",
+      "expected_paths": [],
+      "category": "no_answer"
+    },
+    {
+      "id": "noanswer_8",
+      "question": "medieval heraldry",
+      "actor_id": "alice",
+      "expected_paths": [],
+      "category": "no_answer"
+    },
+    {
+      "id": "noanswer_9",
+      "question": "glacier permafrost",
+      "actor_id": "alice",
+      "expected_paths": [],
+      "category": "no_answer"
+    },
+    {
+      "id": "acl_0",
+      "question": "run_lease",
+      "actor_id": "bob",
+      "expected_paths": [],
+      "category": "acl"
+    },
+    {
+      "id": "acl_1",
+      "question": "execute_operation",
+      "actor_id": "bob",
+      "expected_paths": [],
+      "category": "acl"
+    },
+    {
+      "id": "acl_2",
+      "question": "SqliteSaver",
+      "actor_id": "bob",
+      "expected_paths": [],
+      "category": "acl"
+    },
+    {
+      "id": "acl_3",
+      "question": "interrupt",
+      "actor_id": "bob",
+      "expected_paths": [],
+      "category": "acl"
+    },
+    {
+      "id": "acl_4",
+      "question": "IdentityStore",
+      "actor_id": "bob",
+      "expected_paths": [],
+      "category": "acl"
+    },
+    {
+      "id": "acl_5",
+      "question": "authorize_scope",
+      "actor_id": "bob",
+      "expected_paths": [],
+      "category": "acl"
+    },
+    {
+      "id": "acl_6",
+      "question": "lexical_recall",
+      "actor_id": "bob",
+      "expected_paths": [],
+      "category": "acl"
+    },
+    {
+      "id": "acl_7",
+      "question": "vector_recall",
+      "actor_id": "bob",
+      "expected_paths": [],
+      "category": "acl"
+    },
+    {
+      "id": "acl_8",
+      "question": "chunk_markdown",
+      "actor_id": "bob",
+      "expected_paths": [],
+      "category": "acl"
+    },
+    {
+      "id": "acl_9",
+      "question": "content_hash",
+      "actor_id": "bob",
+      "expected_paths": [],
+      "category": "acl"
+    }
+  ]
+}

@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from app.harness.events import utc_now_iso
+from app.security import resolved_principals
 
 
 class SQLiteRagStore:
@@ -134,10 +135,11 @@ class SQLiteRagStore:
                 """,
                 (collection,),
             ).fetchall()
+        principals = resolved_principals(actor_id)
         visible = [
             {"chunk_id": row["chunk_id"], "path": row["path"], "content": row["content"], "metadata": _json_dict(row["metadata_json"])}
             for row in rows
-            if _acl_allows(row["acl_json"], actor_id)
+            if _acl_allows(row["acl_json"], principals)
         ]
         ranked = _rank_hybrid(question, visible)
         reranked = _rerank_candidates(question, ranked[: max(limit * 4, 20)])
@@ -154,13 +156,14 @@ class SQLiteRagStore:
                 rows = conn.execute(
                     "SELECT collection, path, size, created_at, version, is_current, valid_to, acl_json FROM rag_document ORDER BY collection, path, version DESC"
                 ).fetchall()
-        return [{key: value for key, value in dict(row).items() if key != "acl_json"} for row in rows if _acl_allows(row["acl_json"], actor_id)]
+        principals = resolved_principals(actor_id)
+        return [{key: value for key, value in dict(row).items() if key != "acl_json"} for row in rows if _acl_allows(row["acl_json"], principals)]
 
     def set_document_acl(self, collection: str, path: str, principals: list[str]) -> bool:
         with self._connection() as conn:
             updated = conn.execute(
                 "UPDATE rag_document SET acl_json = ? WHERE collection = ? AND path = ? AND is_current = 1",
-                (json.dumps(sorted(set(principals or ["*"]))), collection, path),
+                (json.dumps(sorted(set(principals))), collection, path),
             ).rowcount
         return bool(updated)
 
@@ -223,7 +226,7 @@ class SQLiteRagStore:
             removed = conn.execute("DELETE FROM rag_gold_case WHERE case_id = ?", (case_id,)).rowcount
         return bool(removed)
 
-    def add_note(self, collection: str, path: str, content: str) -> dict[str, str]:
+    def add_note(self, collection: str, path: str, content: str, principals: list[str] | None = None) -> dict[str, str]:
         safe_path = path.strip() or "manual-note"
         chunk_id = f"{safe_path}#note-{self._slug(content)[:24]}"
         now = utc_now_iso()
@@ -242,8 +245,10 @@ class SQLiteRagStore:
             else:
                 conn.execute(
                     "INSERT INTO rag_document(collection, path, size, created_at, content_hash, version, is_current, acl_json) VALUES (?, ?, ?, ?, ?, 1, 1, ?)",
-                    (collection, safe_path, len(content), now, content_hash, '["*"]'),
+                    (collection, safe_path, len(content), now, content_hash, json.dumps(principals if principals is not None else ["*"])),
                 )
+            if principals is not None:
+                conn.execute("UPDATE rag_document SET acl_json=? WHERE collection=? AND path=? AND is_current=1", (json.dumps(principals), collection, safe_path))
             conn.execute(
                 "INSERT INTO rag_chunk(collection, chunk_id, path, content, created_at, document_version) VALUES (?, ?, ?, ?, ?, ?)",
                 (collection, chunk_id, safe_path, content, now, version),
@@ -396,6 +401,7 @@ class PgVectorRagStore:
                     "CREATE INDEX IF NOT EXISTS idx_rag_chunk_embedding ON rag_chunk USING ivfflat (embedding vector_cosine_ops) WITH (lists = 100)"
                 )
                 cur.execute("ALTER TABLE rag_document ADD COLUMN IF NOT EXISTS content_hash TEXT")
+                cur.execute("CREATE INDEX IF NOT EXISTS idx_rag_lexical ON rag_chunk USING gin(to_tsvector('simple', content || ' ' || path))")
                 cur.execute("ALTER TABLE rag_document ADD COLUMN IF NOT EXISTS version INTEGER NOT NULL DEFAULT 1")
                 cur.execute("ALTER TABLE rag_document ADD COLUMN IF NOT EXISTS is_current BOOLEAN NOT NULL DEFAULT TRUE")
                 cur.execute("ALTER TABLE rag_document ADD COLUMN IF NOT EXISTS valid_to TIMESTAMPTZ")
@@ -488,28 +494,45 @@ class PgVectorRagStore:
         return {"document_count": len(documents), "chunk_count": len(chunks), "changed_document_count": changed_documents, "changed_chunk_count": len(changed_chunks)}
 
     def query(self, collection: str, question: str, limit: int = 5, actor_id: str = "local-user") -> list[dict[str, Any]]:
-        vector = self.embedding.embed_query(question)
-        with self._connect() as conn:
-            with conn.cursor() as cur:
-                cur.execute(
-                    """
-                    SELECT c.chunk_id, c.path, c.content, c.metadata_json, 1 - (c.embedding <=> %s::vector) AS vector_score, d.acl_json
-                    FROM rag_chunk c JOIN rag_document d
-                      ON c.collection = d.collection AND c.path = d.path AND c.document_version = d.version
-                    WHERE c.collection = %s AND d.is_current = TRUE
-                    ORDER BY embedding <=> %s::vector
-                    LIMIT %s
-                    """,
-                    (_vector_literal(vector), collection, _vector_literal(vector), max(limit * 8, 60)),
-                )
-                rows = cur.fetchall()
-        visible = [
-            {"chunk_id": row[0], "path": row[1], "content": str(row[2]), "metadata": _json_dict(row[3]), "vector_score": float(row[4] or 0)}
-            for row in rows
-            if _acl_allows(_json_text(row[5]), actor_id)
-        ]
-        ranked = _rank_hybrid(question, visible, vector_score_key="vector_score")
-        reranked = _rerank_candidates(question, ranked[: max(limit * 4, 20)])
+        terms = _tokens(question)
+        if not terms:
+            return []
+        vector = _vector_literal(self.embedding.embed_query(question))
+        candidate_limit = max(limit * 8, 60)
+        acl = resolved_principals(actor_id)
+        base = """
+            SELECT c.chunk_id,c.path,c.content,c.metadata_json,
+                   1-(c.embedding <=> %s::vector) AS vector_score,d.acl_json
+            FROM rag_chunk c JOIN rag_document d
+              ON c.collection=d.collection AND c.path=d.path AND c.document_version=d.version
+            WHERE c.collection=%s AND d.is_current=TRUE
+              AND (d.acl_json ?| %s OR d.acl_json @> '["*"]'::jsonb)
+        """
+        # Independent recall: ACL is applied before either candidate LIMIT.
+        lexical_query = " OR ".join('"' + term.replace('"', '') + '"' for term in terms)
+        with self._connect() as conn, conn.cursor() as cur:
+            cur.execute(base + " ORDER BY c.embedding <=> %s::vector LIMIT %s",
+                        (vector, collection, acl, vector, candidate_limit))
+            vector_rows = cur.fetchall()
+            cur.execute(base + """
+                AND to_tsvector('simple', c.content || ' ' || c.path)
+                    @@ websearch_to_tsquery('simple', %s)
+                ORDER BY ts_rank_cd(to_tsvector('simple', c.content || ' ' || c.path),
+                                    websearch_to_tsquery('simple', %s)) DESC LIMIT %s
+                """, (vector, collection, acl, lexical_query, lexical_query, candidate_limit))
+            lexical_rows = cur.fetchall()
+        visible = {}
+        for source, rows in (("vector", vector_rows), ("lexical", lexical_rows)):
+            for row in rows:
+                key = (row[1], row[0])
+                item = visible.setdefault(key, {
+                    "chunk_id": row[0], "path": row[1], "content": str(row[2]),
+                    "metadata": _json_dict(row[3]), "vector_score": float(row[4] or 0),
+                    "retrieval_sources": [], "embedding_source": self.embedding.source,
+                })
+                item["retrieval_sources"].append(source)
+        ranked = _rank_hybrid(question, list(visible.values()), vector_score_key="vector_score")
+        reranked = _rerank_candidates(question, ranked[:max(limit * 4, 20)])
         return [_public_rag_result(item) for item in reranked[:limit]]
 
     def list_documents(self, collection: str | None = None, actor_id: str = "local-user") -> list[dict[str, Any]]:
@@ -545,7 +568,7 @@ class PgVectorRagStore:
                 "valid_to": _china_minute(row[6]) if row[6] else None,
             }
             for row in rows
-            if _acl_allows(_json_text(row[7]), actor_id)
+            if _acl_allows(_json_text(row[7]), resolved_principals(actor_id))
         ]
 
     def set_document_acl(self, collection: str, path: str, principals: list[str]) -> bool:
@@ -553,13 +576,13 @@ class PgVectorRagStore:
             with conn.cursor() as cur:
                 cur.execute(
                     "UPDATE rag_document SET acl_json = %s::jsonb WHERE collection = %s AND path = %s AND is_current = TRUE",
-                    (json.dumps(sorted(set(principals or ["*"]))), collection, path),
+                    (json.dumps(sorted(set(principals))), collection, path),
                 )
                 updated = cur.rowcount
             conn.commit()
         return bool(updated)
 
-    def add_note(self, collection: str, path: str, content: str) -> dict[str, str]:
+    def add_note(self, collection: str, path: str, content: str, principals: list[str] | None = None) -> dict[str, str]:
         safe_path = path.strip() or "manual-note"
         chunk_id = f"{safe_path}#note-{_slug(content)[:24]}"
         now = utc_now_iso()
@@ -588,8 +611,10 @@ class PgVectorRagStore:
                         INSERT INTO rag_document(collection, path, size, created_at, content_hash, version, is_current, acl_json)
                         VALUES (%s, %s, %s, %s, %s, 1, TRUE, %s::jsonb)
                         """,
-                        (collection, safe_path, len(content), now, content_hash, '["*"]'),
+                        (collection, safe_path, len(content), now, content_hash, json.dumps(principals if principals is not None else ["*"])),
                     )
+                if principals is not None:
+                    cur.execute("UPDATE rag_document SET acl_json=%s::jsonb WHERE collection=%s AND path=%s AND is_current=TRUE", (json.dumps(principals), collection, safe_path))
                 cur.execute(
                     """
                     INSERT INTO rag_chunk(collection, chunk_id, path, content, embedding, embedding_source, created_at, document_version)
@@ -732,7 +757,7 @@ def create_rag_store() -> SQLiteRagStore | PgVectorRagStore:
 
 def _config() -> dict[str, str]:
     root = Path(__file__).resolve().parents[2]
-    env_path = root / ".env"
+    env_path = Path(os.getenv("APP_ENV_FILE", str(root / ".env")))
     values: dict[str, str] = {}
     if env_path.exists():
         for raw_line in env_path.read_text(encoding="utf-8", errors="ignore").splitlines():
@@ -754,6 +779,7 @@ def _config() -> dict[str, str]:
         "OPENAI_API_KEY",
         "OPENAI_BASE_URL",
         "DEV_AGENT_RAG_RERANKER",
+        "DEV_AGENT_RAG_MIN_VECTOR_SCORE",
     ]:
         if os.getenv(key):
             values[key] = os.getenv(key, "")
@@ -798,11 +824,14 @@ def _content_hash(chunks: list[dict[str, Any]]) -> str:
 
 
 def _tokens(text: str) -> list[str]:
-    return re.findall(r"[A-Za-z][A-Za-z0-9_-]{1,}|[\u4e00-\u9fa5]{1,}", text.lower())
+    stopwords = {"the", "a", "an", "is", "are", "to", "in", "of", "for", "and", "or", "how", "does", "do", "where", "what", "which", "with", "by", "from", "it", "this", "that"}
+    expanded = re.sub(r"([a-z])([A-Z])", r"\1 \2", text)
+    terms = re.findall(r"[A-Za-z][A-Za-z0-9_-]{1,}|[\u4e00-\u9fa5]{2,}", text.lower() + " " + expanded.lower())
+    return list(dict.fromkeys(term for term in terms if term not in stopwords))
 
 
 def _rank_hybrid(question: str, rows: list[dict[str, Any]], vector_score_key: str | None = None) -> list[dict[str, Any]]:
-    if not rows:
+    if not rows or not _tokens(question):
         return []
     query_terms = _tokens(question)
     corpus_tokens = [_tokens(str(row.get("content") or "")) for row in rows]
@@ -814,10 +843,11 @@ def _rank_hybrid(question: str, rows: list[dict[str, Any]], vector_score_key: st
     bm25_rank = _rank_positions(bm25_scores)
     semantic_rank = _rank_positions(semantic_scores)
     ranked: list[dict[str, Any]] = []
+    threshold = float(_config().get("DEV_AGENT_RAG_MIN_VECTOR_SCORE", "0.35"))
     for index, row in enumerate(rows):
         score = (1 / (60 + bm25_rank[index])) + (1 / (60 + semantic_rank[index]))
         score += bm25_scores[index] * 0.001 + semantic_scores[index] * 0.05
-        if score > 0 or not query_terms:
+        if bm25_scores[index] > 0 or (vector_score_key and semantic_scores[index] >= threshold):
             ranked.append(
                 {
                     **row,
@@ -913,6 +943,8 @@ def _public_rag_result(item: dict[str, Any]) -> dict[str, Any]:
         "content": str(item.get("content") or "")[:800],
         "metadata": metadata,
         "context_content": parent_content or str(item.get("content") or "")[:800],
+        "retrieval_sources": item.get("retrieval_sources", ["lexical"]),
+        "embedding_source": item.get("embedding_source", "token_overlap"),
     }
 
 
@@ -985,15 +1017,16 @@ def _china_minute(value: Any) -> str:
         return text[:16].replace("T", ", ")
 
 
-def _acl_allows(raw_acl: Any, actor_id: str) -> bool:
+def _acl_allows(raw_acl: Any, actor_id: str | list[str]) -> bool:
+    actors = set(actor_id if isinstance(actor_id, list) else [actor_id])
     if isinstance(raw_acl, list):
         principals = [str(item) for item in raw_acl]
-        return "*" in principals or actor_id in principals
+        return "*" in principals or bool(actors.intersection(principals))
     try:
-        principals = json.loads(str(raw_acl or '["*"]'))
+        principals = json.loads(str(raw_acl or '[]'))
     except json.JSONDecodeError:
-        principals = ["*"]
-    return "*" in principals or actor_id in principals
+        principals = []
+    return isinstance(principals, list) and ("*" in principals or bool(actors.intersection(str(p) for p in principals)))
 
 
 rag_store = create_rag_store()

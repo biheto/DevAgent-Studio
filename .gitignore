@@ -13,3 +13,7 @@ web/dist/
 web/tsconfig.tsbuildinfo
 __pycache__/
 *.pyc
+data/*.db.journal
+data/*.db-wal
+data/*.db-shm
+data/*.db-journal

@@ -1,5 +1,7 @@
 # DevAgent Studio
 
+Persistent recovery, authenticated shared access, retrieval ablations and acceptance commands: [2026-11 reliability iteration](docs/ITERATION.md).
+
 [English](#english) | [中文](#中文)
 
 <a id="english"></a>
