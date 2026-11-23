@@ -30,7 +30,7 @@ It is deliberately not a code-writing IDE. Its focus is making software delivery
 - **Plugin Marketplace**: install resource packs from built-in catalogs, local paths, URLs, GitHub-style sources, or an external `SKILL.md` file.
 - **Safe third-party code execution**: Code Skills can run in a constrained Docker sandbox with no network, read-only mounts, resource limits, and audit logs.
 - **Governed RAG that can be evaluated**: project knowledge now supports incremental indexing, document versions, ACL filtering, hybrid retrieval, optional LLM rerank, and editable chunk-level Gold Sets.
-- **Switchable Colorful and Clear UI**: the React workbench can switch between a colorful theme with yellow/green/blue/pink environmental light pillars and a clear SVG-refraction liquid-glass theme with pointer ripples, hover lift, and connected mode transitions. The selected theme is persisted locally.
+- **Focused, responsive workbench**: a light gray navigation frame, white working surfaces, and restrained orange accents keep tasks, execution events, and results easy to scan. Sliding mode selection, subtle press feedback, keyboard navigation, and reduced-motion support make interactions responsive without adding visual clutter.
 
 ## Business Workflows
 
@@ -54,25 +54,27 @@ The PR workflow accepts a GitHub PR URL and can post its governance report back 
 
 ## Product Preview / 页面预览
 
-The screenshots below show the Clear theme with per-surface SVG displacement maps, refracted grid detail, reflective rims, layered shadows, and liquid button interactions. Use the header switch to move between the Colorful and Clear themes at any time.
+The screenshots below show the redesigned workbench: grouped navigation, a focused task form with expandable advanced settings, live execution events, and consistent controls across all ten pages. Use **Ctrl / Command + K** to jump to a page; on smaller screens, navigation opens from the menu button. Motion respects the system's reduced-motion setting.
 
-| Run workbench / 运行 | Visual workflow / 编排 |
+以下截图展示重构后的工作台：灰白布局、分组导航、橙色重点，以及滑动选中和轻微按压反馈。任务配置、执行动态与结果各有清晰区域，高级参数按需展开。支持 **Ctrl / Command + K** 快速前往页面、移动端导航和减少动态效果。设计与交互说明见 [前端设计](docs/frontend-design.md)。
+
+| Task workbench / 任务工作台 | Visual workflow / 工作流编排 |
 | --- | --- |
 | ![Run workbench](docs/assets/run-preview.png) | ![Visual workflow](docs/assets/workflow-preview.png) |
 
-| Reports / 报告 | Interactive chat / 追问 |
+| Reports / 分析报告 | Chat and knowledge / 对话与知识 |
 | --- | --- |
 | ![Reports](docs/assets/report-preview.png) | ![Interactive chat](docs/assets/chat-preview.png) |
 
-| Task history / 历史 | LLM governance / LLM |
+| Task history / 任务历史 | Models and usage / 模型与用量 |
 | --- | --- |
 | ![Task history](docs/assets/history-preview.png) | ![LLM console](docs/assets/llm-console-preview.png) |
 
-| MCP console / MCP | Skills console / Skills |
+| MCP tools / 工具连接 | Skills / 技能管理 |
 | --- | --- |
 | ![MCP console](docs/assets/mcp-console-preview.png) | ![Skills console](docs/assets/skill-preview.png) |
 
-| Plugin Marketplace / Market | Benchmark dashboard / Bench |
+| Plugin marketplace / 插件市场 | Benchmarks / 效果评测 |
 | --- | --- |
 | ![Plugin Marketplace](docs/assets/market-preview.png) | ![Benchmark dashboard](docs/assets/benchmark-dashboard-preview.png) |
 
@@ -431,7 +433,7 @@ DevAgent Studio 是一个面向**软件项目理解与研发治理**的开源多
 - **受控长期记忆**：对话先经 LLM/规则提取为候选记忆，再通过质量评分、冲突检测、人工确认、生命周期策略和 scope 权限边界沉淀到 RAG。
 - **遗忘衰减而非无限累积**：稳定规则长期保留；普通偏好进入 90 天复核，到期后标记为 `expired` 并退出检索，但保留审计记录，可由用户刷新、更新或删除，避免陈旧偏好和过时决策持续干扰 Agent。
 - **RAG 治理与可评测**：知识库支持增量索引、文档版本化、ACL 权限过滤、BM25/向量混合检索、可选 LLM Rerank 和 Chunk Gold Set。
-- **缤纷 / 清透双主题 UI**：顶部可在带黄绿蓝粉彩色环境光柱的“缤纷”主题与 SVG 折射水玻璃“清透”主题之间切换；清透模式支持边缘折射、悬浮阴影、点击涟漪和模式按钮液态连贯切换，并在浏览器本地保存用户选择。
+- **简洁灵动的响应式工作台**：灰白布局配合克制的橙色强调，分组导航清晰区分工作空间与能力管理；任务配置、执行动态和结果分区呈现，高级参数按需展开。提供滑动模式选中、轻微按压反馈、Ctrl / Command + K 快速导航和移动端菜单，并尊重系统的减少动态效果设置。
 
 ## 业务工作流
 

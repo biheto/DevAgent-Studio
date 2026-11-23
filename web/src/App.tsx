@@ -11,7 +11,6 @@ import {
   FileSearch,
   FolderOpen,
   History,
-  LayoutDashboard,
   MessageSquare,
   Play,
   Puzzle,
@@ -24,8 +23,8 @@ import {
   Wrench,
   X,
 } from 'lucide-react';
-import { FormEvent, PointerEvent, ReactNode, Ref, useEffect, useMemo, useRef, useState } from 'react';
-import { attachLiquidGlassSurfaces } from './liquidGlass';
+import { CSSProperties, FormEvent, PointerEvent, ReactNode, Ref, useEffect, useMemo, useRef, useState } from 'react';
+import { WorkbenchShell, statusLabel, type ViewKey } from './components/WorkbenchShell';
 import { extractMentorView, extractMarkdownSection, deriveModules, joinProjectPath, buildFocusedFileWorkflow, normalizeNodes, edgeKeyFor, buildLocalMermaid, firstLine, deriveToolCalls, deriveAgentOutputs, formatToolCall, formatAgentOutput, extractTaskResultArtifact, extractResumeSnapshots, deriveResumeSnapshots, summarizeResumeState, summarizeValue, parseMarkdown, parseMermaid } from './workflow/presentation';
 import {
   addKnowledgeNote,
@@ -138,69 +137,54 @@ import {
   WorkflowValidation,
 } from './types';
 
-type ViewKey = 'run' | 'workflow' | 'reports' | 'chat' | 'history' | 'llm' | 'mcp' | 'skills' | 'marketplace' | 'benchmark';
 type ChatMode = 'task' | 'knowledge' | 'coach';
 type ChatMessage = { role: 'user' | 'assistant'; content: string; source?: string; day?: number | null; theme?: string | null };
 type FocusKind = 'module' | 'file';
 type ReportTab = 'final' | 'mentor' | 'mermaid' | 'governance';
-type UiTheme = 'classic' | 'liquid';
 
 const defaultProjectPath = 'D:/Java/project/Project/AI Agent/DevAgent Studio';
 
 const modeItems: Array<{ mode: ExecutionMode; label: string; icon: typeof Boxes }> = [
-  { mode: 'agent', label: 'Agent', icon: Boxes },
-  { mode: 'workflow', label: 'Workflow', icon: Workflow },
-  { mode: 'planner', label: 'Planner', icon: ClipboardList },
-  { mode: 'collaboration', label: 'Collab', icon: Activity },
-  { mode: 'tool', label: 'Tool', icon: Wrench },
-  { mode: 'knowledge', label: 'Knowledge', icon: Database },
+  { mode: 'agent', label: '自主分析', icon: Boxes },
+  { mode: 'workflow', label: '工作流', icon: Workflow },
+  { mode: 'planner', label: '自动规划', icon: ClipboardList },
+  { mode: 'collaboration', label: '多智能体', icon: Activity },
+  { mode: 'tool', label: '工具调用', icon: Wrench },
+  { mode: 'knowledge', label: '知识检索', icon: Database },
 ];
 
 const modeHelp: Record<ExecutionMode, { title: string; description: string; button: string }> = {
   agent: {
-    title: 'Agent 模式',
-    description: '不使用当前画布；后端运行默认小工作流：Planner → Project Analyzer → Reporter。',
-    button: '运行 Agent 模式',
+    title: '自主分析',
+    description: '自动分析项目，整理结构与建议，适合快速了解代码。',
+    button: '开始分析',
   },
   workflow: {
-    title: 'Workflow 模式',
-    description: '使用当前可视化画布的节点和连线执行；拖拽编排后的流程只在这个模式生效。',
+    title: '工作流',
+    description: '按已编排的节点顺序执行，可在工作流页面调整流程。',
     button: '运行当前画布',
   },
   planner: {
-    title: 'Planner 模式',
-    description: '不使用当前画布；根据目标自动生成 Workflow，执行完成后把生成的流程刷新到画布。',
-    button: '生成并运行 Workflow',
+    title: '自动规划',
+    description: '根据目标自动规划步骤，完成后可在画布查看生成的流程。',
+    button: '规划并执行',
   },
   collaboration: {
-    title: 'Collab 模式',
-    description: '不使用当前画布；调用固定 collaboration_graph：Planner → Project Analyzer → Code Reviewer → RAG Processor → Supervisor → Reporter。',
-    button: '运行多 Agent 协作',
+    title: '多智能体协作',
+    description: '由规划、分析、审查和知识检索等多个 Agent 协作完成任务。',
+    button: '开始协作',
   },
   tool: {
-    title: 'Tool 模式',
-    description: '不使用当前画布；后端运行默认工具工作流：Planner → MCP Tool → Reporter。',
-    button: '运行 Tool 模式',
+    title: '工具调用',
+    description: '规划并调用已连接的 MCP 工具，汇总执行结果。',
+    button: '执行工具任务',
   },
   knowledge: {
-    title: 'Knowledge 模式',
-    description: '不使用当前画布；后端运行默认知识检索工作流：Planner → RAG Query → Reporter。',
-    button: '运行 Knowledge 模式',
+    title: '知识检索',
+    description: '检索已有知识库，为问题查找相关资料并生成回答。',
+    button: '开始检索',
   },
 };
-
-const navItems: Array<{ view: ViewKey; label: string; icon: typeof LayoutDashboard }> = [
-  { view: 'run', label: '运行', icon: LayoutDashboard },
-  { view: 'workflow', label: '编排', icon: Workflow },
-  { view: 'reports', label: '报告', icon: FileText },
-  { view: 'chat', label: '追问', icon: MessageSquare },
-  { view: 'history', label: '历史', icon: History },
-  { view: 'llm', label: 'LLM', icon: BarChart3 },
-  { view: 'mcp', label: 'MCP', icon: Wrench },
-  { view: 'skills', label: 'Skills', icon: Puzzle },
-  { view: 'marketplace', label: 'Market', icon: Puzzle },
-  { view: 'benchmark', label: 'Bench', icon: Activity },
-];
 
 const palette = [
   { type: 'planner', name: 'Planner', icon: ClipboardList, config: {} },
@@ -230,18 +214,6 @@ const initialEdges: WorkflowEdge[] = [
 ];
 
 export function App() {
-  const [uiTheme, setUiTheme] = useState<UiTheme>(() => {
-    const requested = new URLSearchParams(window.location.search).get('theme');
-    if (requested === 'colorful' || requested === 'classic') return 'classic';
-    if (requested === 'clear' || requested === 'liquid') return 'liquid';
-    const saved = window.localStorage.getItem('dev-agent-ui-theme');
-    return saved === 'classic' ? 'classic' : 'liquid';
-  });
-  useEffect(() => {
-    window.localStorage.setItem('dev-agent-ui-theme', uiTheme);
-    if (uiTheme !== 'liquid') return undefined;
-    return attachLiquidGlassSurfaces();
-  }, [uiTheme]);
   const [activeView, setActiveView] = useState<ViewKey>(() => {
     const requested = new URLSearchParams(window.location.search).get('view');
     const views: ViewKey[] = ['run', 'workflow', 'reports', 'chat', 'history', 'llm', 'mcp', 'skills', 'marketplace', 'benchmark'];
@@ -1354,90 +1326,15 @@ export function App() {
   );
 
   return (
-    <div className="app-shell" data-ui-theme={uiTheme}>
-      <svg className="liquid-glass-defs" aria-hidden="true" focusable="false">
-        <filter id="liquid-glass-refraction" x="-12%" y="-12%" width="124%" height="124%" colorInterpolationFilters="sRGB">
-          <feTurbulence type="fractalNoise" baseFrequency="0.012 0.035" numOctaves="2" seed="18" result="noise" />
-          <feGaussianBlur in="noise" stdDeviation="1.2" result="softNoise" />
-          <feDisplacementMap in="SourceGraphic" in2="softNoise" scale="18" xChannelSelector="R" yChannelSelector="G" result="refracted" />
-          <feGaussianBlur in="refracted" stdDeviation="0.18" />
-        </filter>
-        <filter id="liquid-glass-rim" x="-16%" y="-16%" width="132%" height="132%" colorInterpolationFilters="sRGB">
-          <feTurbulence type="fractalNoise" baseFrequency="0.004 0.011" numOctaves="1" seed="28" result="rimNoise" />
-          <feGaussianBlur in="rimNoise" stdDeviation="1.4" result="softRimNoise" />
-          <feDisplacementMap in="SourceGraphic" in2="softRimNoise" scale="13" xChannelSelector="R" yChannelSelector="G" />
-        </filter>
-      </svg>
-      <aside className="side-nav">
-        <div className="nav-garden nav-garden-top" aria-hidden="true">
-          <i>✦</i>
-          <i>✿</i>
-          <i>☘</i>
-          <i>✽</i>
-        </div>
-        <div className="brand-mark">D</div>
-        <nav>
-          {navItems.map((item) => {
-            const Icon = item.icon;
-            return (
-              <button
-                key={item.view}
-                className={activeView === item.view ? 'active' : ''}
-                onClick={() => handleNavigate(item.view)}
-                title={item.label}
-              >
-                <Icon size={22} />
-                <span>{item.label}</span>
-              </button>
-            );
-          })}
-        </nav>
-        <div className="nav-garden nav-garden-middle" aria-hidden="true">
-          <i>✦</i>
-          <i>❀</i>
-          <i>☘</i>
-          <i>✿</i>
-        </div>
-        <div className="nav-garden nav-garden-bottom" aria-hidden="true">
-          <i>❀</i>
-          <i>✦</i>
-          <i>☘</i>
-        </div>
-      </aside>
-
-      <main className="app-main">
-        <header className="topbar">
-          <div>
-            <h1>DevAgent Studio</h1>
-            <span>可视化 Workflow 任务工作台</span>
-          </div>
-          <div className="topbar-actions">
-            <div className="theme-switch" role="group" aria-label="界面风格">
-              <button
-                type="button"
-                className={uiTheme === 'classic' ? 'active' : ''}
-                onClick={() => setUiTheme('classic')}
-                title="使用带彩色环境光的缤纷风格"
-              >
-                缤纷
-              </button>
-              <button
-                type="button"
-                className={uiTheme === 'liquid' ? 'active' : ''}
-                onClick={() => setUiTheme('liquid')}
-                title="使用动态透明水玻璃的清透风格"
-              >
-                清透
-              </button>
-            </div>
-            <div className={`status-pill ${latestStatus}`}>{running ? 'running' : latestStatus}</div>
-          </div>
-        </header>
-
+    <WorkbenchShell activeView={activeView} onNavigate={handleNavigate} status={running ? 'running' : latestStatus} projectPath={projectPath}>
         {activeView === 'run' ? (
           <section className="page-grid run-page">
+            <div className="workspace-heading">
+              <div><h2>让开发任务，有序推进。</h2><p>描述目标，选择执行方式，和 Agent 一起完成工作。</p></div>
+              <button className="secondary" onClick={() => handleNavigate('workflow')}><Workflow size={16} />编排工作流<ArrowRight size={14} /></button>
+            </div>
             <div className="panel run-panel">
-              <PanelTitle icon={<Play size={17} />} title="运行入口" />
+              <PanelTitle icon={<Play size={17} />} title="新建任务" action={<span className="panel-caption">配置与执行</span>} />
               <BusinessScenarioPicker
                 selected={businessScenario}
                 prBase={prBase}
@@ -1461,7 +1358,6 @@ export function App() {
                 setExecutionMode(mode);
               }} />
               <ModeHint executionMode={executionMode} />
-              <AnalysisGuide onApply={applyGuide} />
               <RunForm
                 goal={goal}
                 projectPath={projectPath}
@@ -1475,16 +1371,17 @@ export function App() {
                 onRequireReviewChange={setRequireReview}
                 onSubmit={handleRunTask}
               />
-              {error ? <p className="error-text">{error}</p> : null}
+              <details className="task-templates"><summary>更多任务模板<ArrowRight size={14} /></summary><AnalysisGuide onApply={applyGuide} /></details>
+              {error ? <p className="error-text" role="alert">{error}</p> : null}
             </div>
 
             <div className="panel timeline-large">
-              <PanelTitle icon={<Activity size={17} />} title="执行事件" />
+              <PanelTitle icon={<Activity size={17} />} title="执行动态" action={<span className="panel-caption">{events.length ? `${events.length} 条事件` : '等待任务开始'}</span>} />
               <Timeline events={events} selectedEventId={selectedEvent?.event_id} onSelect={setSelectedEvent} />
             </div>
 
             <div className="panel state-panel">
-              <PanelTitle icon={<Activity size={17} />} title="当前状态" />
+              <PanelTitle icon={<Activity size={17} />} title="任务详情" />
               <StateSummary latestTaskId={latestTaskId} latestStatus={latestStatus} workflowName={workflowName} />
               {taskNeedsReview && latestTaskId ? (
                 <ReviewBox
@@ -1570,14 +1467,6 @@ export function App() {
                   suggestionRecords={suggestionRecords}
                 />
               ) : null}
-            </div>
-            <div className="panel report-card markdown-card">
-              <PanelTitle icon={<FileText size={17} />} title="最终报告" />
-              <MarkdownView text={finalReport || '运行当前画布后，这里会显示格式化后的最终报告。'} />
-            </div>
-            <div className="panel report-card mermaid-card">
-              <PanelTitle icon={<Workflow size={17} />} title="Mermaid 图" />
-              <MermaidDiagram source={mermaid || buildLocalMermaid(nodes, edges)} />
             </div>
             <div className="panel report-card suggestions-card">
               <PanelTitle icon={<ShieldCheck size={17} />} title="优化建议" />
@@ -1753,8 +1642,7 @@ export function App() {
             onSelect={handleFocusTarget}
           />
         ) : null}
-      </main>
-    </div>
+    </WorkbenchShell>
   );
 }
 
@@ -1785,12 +1673,14 @@ function RiskBadge({ level }: { level?: string }) {
 }
 
 function ModeTabs({ executionMode, onChange }: { executionMode: ExecutionMode; onChange: (mode: ExecutionMode) => void }) {
+  const index = modeItems.findIndex(item => item.mode === executionMode);
   return (
-    <div className="mode-tabs">
+    <div className="mode-tabs" role="group" aria-label="执行方式" style={{ '--mode-column': index % 3, '--mode-row': Math.floor(index / 3) } as CSSProperties}>
+      <span className="mode-indicator" aria-hidden="true" />
       {modeItems.map((item) => {
         const Icon = item.icon;
         return (
-          <button key={item.mode} className={executionMode === item.mode ? 'active' : ''} onClick={() => onChange(item.mode)}>
+          <button type="button" key={item.mode} aria-pressed={executionMode === item.mode} className={executionMode === item.mode ? 'active' : ''} onClick={() => onChange(item.mode)}>
             <Icon size={16} />
             {item.label}
           </button>
@@ -1836,14 +1726,14 @@ function BusinessScenarioPicker({
   onPostCommentChange: (value: boolean) => void;
 }) {
   const scenarios: Array<{ code: BusinessScenarioCode; title: string; value: string; icon: typeof BookOpen }> = [
-    { code: 'onboarding', title: '项目入职', value: '生成项目架构导览、关键模块说明、风险清单和新成员学习路径。', icon: BookOpen },
+    { code: 'onboarding', title: '了解项目', value: '生成项目架构导览、关键模块说明、风险清单和新成员学习路径。', icon: BookOpen },
     { code: 'pr_review', title: 'PR 风险审查', value: '审查当前 Git 变更的影响范围、代码风险和测试缺口，给出合并决策。', icon: ShieldCheck },
     { code: 'governance', title: '架构治理', value: '检查架构漂移、依赖风险和技术债，输出可执行的治理优先级。', icon: Activity },
   ];
   return (
     <div className="business-scenarios">
       <div className="business-scenario-heading">
-        <div><strong>业务场景</strong><span>选择后运行真实任务闭环</span></div>
+        <div><strong>从场景开始</strong><span>或直接填写任务目标</span></div>
         {selected ? <button type="button" onClick={onClear}>返回通用模式</button> : null}
       </div>
       <div className="business-scenario-grid">
@@ -1854,6 +1744,8 @@ function BusinessScenarioPicker({
               type="button"
               key={item.code}
               className={selected === item.code ? 'active' : ''}
+              aria-pressed={selected === item.code}
+              title={item.value}
               onClick={() => onSelect(item.code, item.value)}
             >
               <Icon size={16} />
@@ -1923,18 +1815,18 @@ function RunForm({
   return (
     <form className="run-form" onSubmit={onSubmit}>
       <label>
-        目标
-        <textarea value={goal} onChange={(event) => onGoalChange(event.target.value)} />
-        <FieldHelp>写清楚本次任务目标。Planner、Agent 和 Workflow 会把这段话作为核心输入。</FieldHelp>
+        任务目标
+        <textarea required value={goal} placeholder="例如：分析项目架构，找出值得优先重构的模块…" onChange={(event) => onGoalChange(event.target.value)} />
       </label>
       <label>
         项目路径
-        <input value={projectPath} onChange={(event) => onProjectPathChange(event.target.value)} />
-        <FieldHelp>本地项目目录，项目分析、代码审查、文件工具和 RAG 加工都会从这里读取文件。</FieldHelp>
+        <input required value={projectPath} onChange={(event) => onProjectPathChange(event.target.value)} />
+        <FieldHelp>Agent 将从此目录读取项目文件。</FieldHelp>
       </label>
+      <details className="advanced-settings"><summary><SlidersHorizontal size={15} />高级设置<span>{maxFiles} 个文件 · {requireReview ? '人工审核已开启' : '人工审核已关闭'}</span></summary>
       <div className="form-row">
         <label>
-          文件数
+          扫描文件上限
           <input type="number" min={1} max={5000} value={maxFiles} onChange={(event) => onMaxFilesChange(Number(event.target.value))} />
           <FieldHelp>限制最多扫描多少个文件；数值越大越完整，但执行会更慢。</FieldHelp>
         </label>
@@ -1943,7 +1835,8 @@ function RunForm({
           人工审核
         </label>
       </div>
-      <button className="primary" disabled={running} type="submit">
+      </details>
+      <button className="primary" disabled={running || !goal.trim() || !projectPath.trim()} type="submit" aria-busy={running}>
         {running ? <RefreshCw className="spin" size={17} /> : <Play size={17} />}
         {running ? '执行中...' : submitLabel}
       </button>
@@ -1982,7 +1875,12 @@ function Timeline({
           </button>
         ))
       ) : (
-        <p className="empty-text">运行任务后，这里会显示完整执行事件。</p>
+        <div className="execution-empty">
+          <div className="execution-path" aria-hidden="true"><span><ClipboardList size={20} /></span><i /><span><Boxes size={22} /></span><i /><span><Check size={20} /></span></div>
+          <strong>准备好，开始下一项任务</strong>
+          <p>任务启动后，Agent 的分析步骤、工具调用和执行结果会实时显示在这里。</p>
+          <span className="execution-empty-note">每一步，都有迹可循</span>
+        </div>
       )}
     </div>
   );
@@ -2016,11 +1914,11 @@ function EventDetail({ event }: { event: AgentEvent | null }) {
 function StateSummary({ latestTaskId, latestStatus, workflowName }: { latestTaskId: string; latestStatus: string; workflowName: string }) {
   return (
     <dl className="state-summary">
-      <dt>Task</dt>
+      <dt>任务编号</dt>
       <dd>{latestTaskId || '未运行'}</dd>
-      <dt>Status</dt>
-      <dd>{latestStatus}</dd>
-      <dt>Workflow</dt>
+      <dt>执行状态</dt>
+      <dd>{statusLabel(latestStatus)}</dd>
+      <dt>工作流</dt>
       <dd>{workflowName}</dd>
     </dl>
   );

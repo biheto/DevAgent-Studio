@@ -11,6 +11,7 @@ web/node_modules/
 node_modules/
 web/dist/
 web/tsconfig.tsbuildinfo
+web/.taste-skill/
 __pycache__/
 *.pyc
 data/*.db.journal
