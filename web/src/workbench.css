@@ -49,8 +49,7 @@ em { font-style: normal; }
 .side-nav { display: flex; flex-direction: column; align-items: stretch; justify-content: initial; padding: 0 16px; border: 0; background: var(--ground); overflow: hidden; }
 .studio-brand { display: flex; align-items: center; gap: 12px; height: 64px; flex: 0 0 64px; font-size: 18px; font-weight: 600; letter-spacing: -.5px; color: var(--text); }
 .brand-suffix { margin-left: 4px; font-weight: 400; color: var(--muted); font-size: 14px; letter-spacing: 0; }
-.studio-mark { display: flex; gap: 3px; align-items: center; color: var(--accent); font-size: 30px; line-height: 32px; font-weight: 500; }
-.studio-mark i { width: 5px; height: 5px; border-radius: 50%; background: currentColor; }
+.studio-mark { display: block; width: 32px; height: 32px; flex: none; }
 .project-context { display: flex; align-items: center; gap: 12px; padding: 12px; background: var(--surface); border: 1px solid var(--border); border-radius: 8px; margin: 8px 0 24px; }
 .project-context > span:last-child { min-width: 0; }
 .project-initial { width: 32px; height: 32px; border: 1px solid var(--border); border-radius: 8px; display: grid; place-items: center; flex: none; font-weight: 600; }

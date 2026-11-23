@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
+  <title>DevAgent Studio</title>
+  <rect width="32" height="32" rx="8" fill="#fff"/>
+  <path d="M6 5h8c7.2 0 12 4.3 12 11s-4.8 11-12 11H6Z" fill="none" stroke="#242424" stroke-width="3" stroke-linejoin="round"/>
+  <path d="M6 16h7l5-5m-5 5 5 5" fill="none" stroke="#c84908" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+  <g fill="#c84908"><circle cx="18" cy="11" r="2"/><circle cx="18" cy="21" r="2"/></g>
+</svg>
