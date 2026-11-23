@@ -25,6 +25,7 @@ class LLMProvider:
             "task_qa",
             "learning_coach",
             "memory_extractor",
+            "repairer",
         ]
         self.prompt_versions = [
             {
@@ -271,6 +272,10 @@ class LLMProvider:
                 "latency_ms": latency_ms,
             }
 
+        from app.harness.budget import reserve, settle
+        call_id, output_limit = reserve(self, agent, config["model"], system_prompt + "\n" + user_prompt)
+        if output_limit:
+            config = {**config, "output_limit": output_limit}
         try:
             from langchain_openai import ChatOpenAI
 
@@ -284,6 +289,7 @@ class LLMProvider:
             output_text = str(response.content)
             latency_ms = self._elapsed_ms(started)
             token_usage = self._extract_token_usage(response)
+            settle(call_id, token_usage, self)
             self._save_trace(
                 trace_id=trace_id,
                 agent=agent,
@@ -306,6 +312,7 @@ class LLMProvider:
                 "token_usage": token_usage,
             }
         except Exception as exc:
+            settle(call_id, None, self)
             latency_ms = self._elapsed_ms(started)
             self._save_trace(
                 trace_id=trace_id,
@@ -612,6 +619,8 @@ class LLMProvider:
         }
         if config["base_url"]:
             kwargs["base_url"] = config["base_url"]
+        if config.get("output_limit"):
+            kwargs.update(max_tokens=config["output_limit"], max_retries=0)
         try:
             return chat_openai(**kwargs)
         except TypeError:

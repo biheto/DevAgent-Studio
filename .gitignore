@@ -18,3 +18,4 @@ data/*.db.journal
 data/*.db-wal
 data/*.db-shm
 data/*.db-journal
+data/repair_runs/

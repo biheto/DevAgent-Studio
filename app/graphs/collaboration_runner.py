@@ -5,6 +5,7 @@ from typing import Any
 from app.graphs.studio_graphs import _build_collaboration_graph, collaboration_result, _build_collaboration_report
 from app.graphs.collaboration_policy import evidence_markdown
 from app.harness.durable import execute_graph
+from app.harness.budget import task_budget, snapshot
 
 
 COLLABORATION_NODES = [
@@ -32,11 +33,17 @@ def run_collaboration_task(input_state: dict[str, Any]) -> dict[str, Any]:
         "business_scenario": input_state.get("business_scenario", ""),
         "review_comment": input_state.get("review_comment", ""),
         "events": [],
+        "parallel_workers": input_state.get("parallel_workers", False),
+        "repair_options": input_state.get("repair_options", {"enabled": False}),
+        "budget": input_state.get("budget", {}),
+        "original_project_path": input_state.get("original_project_path") or input_state.get("project_path"),
+        "repair_round": 0,
     }
     if not graph_state["project_path"]:
         raise ValueError("project_path is required for project collaboration")
     definition = {"graph_type": "collaboration", "graph_version": 2, "workflow_name": "multi_agent_collaboration"}
-    state = execute_graph(_build_collaboration_graph, definition, graph_state, input_state.get("durable_action"))
+    with task_budget(input_state["task_id"], graph_state["budget"]):
+        state = execute_graph(_build_collaboration_graph, definition, graph_state, input_state.get("durable_action"))
     result = collaboration_result(state)
     execution_status = state["execution_status"]
     draft = ""
@@ -44,12 +51,13 @@ def run_collaboration_task(input_state: dict[str, Any]) -> dict[str, Any]:
         draft = "# 待审核或未完成的协作摘要\n\n此摘要不是正式报告。\n\n" + _build_collaboration_report(state) + "\n\n" + evidence_markdown(state)
     public_result = {
         **result,
+        "budget_usage": snapshot(input_state["task_id"]),
         "execution_status": execution_status,
         "execution_error": state.get("execution_error"),
         "resume_checkpoint": state.get("durable_checkpoint"),
         "draft_report": draft,
         "workflow_name": "multi_agent_collaboration",
-        "mermaid": build_collaboration_mermaid(result.get("execution_plan"), result.get("human_review_required", True)),
+        "mermaid": build_collaboration_mermaid(result.get("execution_plan"), result.get("human_review_required", True), state.get("parallel_workers", False), state.get("repair_options", {}).get("enabled", False)),
         "suggestions": _collaboration_suggestions(result),
         "suggestion_records": _collaboration_suggestion_records(result),
         "tool_calls": [],
@@ -64,7 +72,7 @@ def run_collaboration_task(input_state: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def build_collaboration_mermaid(plan: dict | None = None, review: bool = True) -> str:
+def build_collaboration_mermaid(plan: dict | None = None, review: bool = True, parallel: bool = False, repair: bool = False) -> str:
     selected = ["planner", *[step["agent"] for step in (plan or {}).get("steps", [])], "supervisor"] if plan else [node for node, _ in COLLABORATION_NODES if node not in {"human_review", "reporter"}]
     if review:
         selected.append("human_review")
@@ -73,8 +81,19 @@ def build_collaboration_mermaid(plan: dict | None = None, review: bool = True) -
     lines = ["flowchart LR"]
     for node_id in selected:
         lines.append(f"  {node_id}[{labels[node_id]}]")
-    for source, target in zip(selected, selected[1:]):
+    if parallel:
+        for worker in selected[1:selected.index("supervisor")]:
+            lines.extend([f"  planner --> {worker}", f"  {worker} --> supervisor"])
+        tail = selected[selected.index("supervisor"):]
+    else:
+        tail = selected
+    for source, target in zip(tail, tail[1:]):
         lines.append(f"  {source} -->|{'approve' if source == 'human_review' else 'next'}| {target}")
+    if repair:
+        lines.extend(["  supervisor -->|findings and rounds remaining| repair[Candidate repair and validation]",
+                      "  repair -->|validation feedback| replan[Replan]"])
+        for worker in (selected[1:selected.index("supervisor")] if parallel else selected[1:2]):
+            lines.append(f"  replan --> {worker}")
     if review:
         lines.append("  human_review -->|reject| stopped[Stopped]")
     return "\n".join(lines)

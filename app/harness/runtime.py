@@ -49,7 +49,7 @@ class HarnessRuntime:
                 if graph_event.get("task_id") and not graph_event.get("persisted") and graph_event.get("event_id") not in context_ids:
                     task_store.append_event(graph_event)
 
-            final_message = {"waiting_review": "等待人工审核", "failed": "任务执行失败，可恢复", "cancelled": "任务已取消", "partial_success": "任务部分成功"}.get(context.status, "任务执行完成")
+            final_message = {"budget_paused": "预算不足，任务已暂停", "waiting_review": "等待人工审核", "failed": "任务执行失败，可恢复", "cancelled": "任务已取消", "partial_success": "任务部分成功"}.get(context.status, "任务执行完成")
             event = context.events.emit(context.task_id, "task", final_message, status=context.status)
             task_store.append_event(event.to_dict())
             combined_events = context.events.to_list()[:-1] + graph_events + [event.to_dict()]
@@ -114,7 +114,7 @@ def _governance_artifact(public_result: dict[str, Any]) -> dict[str, Any]:
 
 def _resolve_task_status(public_result: dict[str, Any]) -> str:
     explicit = public_result.get("execution_status")
-    if explicit in {"failed", "partial_success", "cancelled", "waiting_review", "completed"}:
+    if explicit in {"failed", "partial_success", "cancelled", "waiting_review", "completed", "budget_paused"}:
         return explicit
     latest = {}
     for event in public_result.get("workflow_events", public_result.get("events", [])):

@@ -4,6 +4,8 @@ from typing import Any, Optional
 from uuid import uuid4
 
 from pydantic import BaseModel, Field
+from app.harness.budget import BudgetOptions
+from app.agents.repair_loop import RepairOptions
 
 
 class CodeReviewRequest(BaseModel):
@@ -407,6 +409,9 @@ class TaskRunRequest(BaseModel):
     input_text: Optional[str] = None
     nodes: list[WorkflowNode] = Field(default_factory=list)
     edges: list[WorkflowEdge] = Field(default_factory=list)
+    parallel_workers: bool = False
+    repair_options: RepairOptions = Field(default_factory=RepairOptions)
+    budget: BudgetOptions = Field(default_factory=BudgetOptions)
 
 
 class TaskRunResponse(BaseModel):
@@ -426,3 +431,6 @@ class BusinessScenarioRequest(BaseModel):
     pr_head: Optional[str] = None
     pr_url: Optional[str] = None
     post_comment: bool = False
+    parallel_workers: bool = False
+    repair_options: RepairOptions = Field(default_factory=RepairOptions)
+    budget: BudgetOptions = Field(default_factory=BudgetOptions)

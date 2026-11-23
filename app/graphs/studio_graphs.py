@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any, TypedDict
+from typing import Annotated, Any, TypedDict
 from uuid import uuid4
 import json
 
@@ -17,6 +17,18 @@ from app.skills.registry import skill_registry
 from app.providers.llm_provider import llm_provider
 
 
+def merge_events(left, right):
+    return list({item["event_id"]: item for item in [*left, *right]}.values())
+
+
+def merge_agents(left, right):
+    return list(dict.fromkeys([*left, *right]))
+
+
+def merge_rounds(left, right):
+    return {**left, **right}
+
+
 class StudioState(TypedDict, total=False):
     project_path: str
     max_files: int
@@ -29,11 +41,19 @@ class StudioState(TypedDict, total=False):
     nodes: list[dict[str, Any]]
     require_human_review: bool
     task_id: str
-    events: list[dict[str, Any]]
+    events: Annotated[list[dict[str, Any]], merge_events]
     plan: list[str]
     execution_plan: dict[str, Any]
     planning: dict[str, Any]
-    completed_agents: list[str]
+    completed_agents: Annotated[list[str], merge_agents]
+    worker_rounds: Annotated[dict[str, int], merge_rounds]
+    parallel_workers: bool
+    repair_options: dict[str, Any]
+    repair_round: int
+    repair_result: dict[str, Any]
+    repair_history: list[dict[str, Any]]
+    original_project_path: str
+    budget: dict[str, Any]
     quality_gate: dict[str, Any]
     review_decision: str
     review_comment: str
@@ -108,6 +128,8 @@ def _append_event(state: StudioState, node: str, agent: str, content: str, statu
 
 def _planner_node(state: StudioState) -> StudioState:
     plan, metadata = create_plan(state["goal"], state.get("project_path"), state.get("business_scenario", ""))
+    if state.get("repair_options", {}).get("enabled") and not any(step["agent"] == "code_reviewer" for step in plan["steps"]):
+        plan["steps"].append({"agent": "code_reviewer", "objective": "为修复闭环提供代码证据"})
     return {
         **state, "execution_plan": plan, "planning": metadata, "completed_agents": [],
         "plan": [f"{step['agent']}: {step['objective']}" for step in plan["steps"]],
@@ -122,7 +144,7 @@ def _run_worker(state: StudioState, agent: str, result_key: str, execute) -> Stu
     except Exception as exc:
         _append_event(state, agent, agent, str(exc), "failed")
         raise
-    return {**state, result_key: result, "completed_agents": [*state.get("completed_agents", []), agent],
+    return {result_key: result, "completed_agents": [agent], "worker_rounds": {agent: state.get("repair_round", 0)},
             "events": _append_event(state, agent, agent, "执行完成，结果已交给 Supervisor")}
 
 
@@ -144,9 +166,40 @@ def _rag_processor_subgraph_node(state: StudioState) -> StudioState:
     })["result"])
 
 
-def _next_worker(state: StudioState) -> str:
-    completed = state.get("completed_agents", [])
-    return next((step["agent"] for step in state["execution_plan"]["steps"] if step["agent"] not in completed), "supervisor")
+def _dispatch_workers(state: StudioState):
+    pending = [step["agent"] for step in state["execution_plan"]["steps"]
+               if state.get("worker_rounds", {}).get(step["agent"], 0 if step["agent"] in state.get("completed_agents", []) else -1) != state.get("repair_round", 0)]
+    return (pending if state.get("parallel_workers") else pending[:1]) or ["supervisor"]
+
+
+def _next_worker(state: StudioState):
+    return "supervisor" if state.get("parallel_workers") else _dispatch_workers(state)[0]
+
+
+def _repair_node(state: StudioState):
+    from app.agents.repair_loop import attempt_repair
+    result = attempt_repair(state)
+    update = {"repair_result": result, "repair_round": state.get("repair_round", 0) + 1,
+              "quality_gate": {**state["quality_gate"], "review_required": True,
+                               "reasons": [*state["quality_gate"]["reasons"], "修复尝试需要人工核对"]},
+              "repair_history": [*state.get("repair_history", []), result],
+              "events": _append_event(state, "repair", "repairer", f"修复第 {result['round']} 轮：{result['status']}")}
+    if result.get("workspace"):
+        update["project_path"] = result["workspace"]
+    return update
+
+
+def _replan_node(state: StudioState):
+    feedback = json.dumps({"repair": {key: state["repair_result"].get(key) for key in ("status", "reason", "validation")},
+                           "risk": state.get("quality_gate")}, ensure_ascii=False)
+    plan, metadata = create_plan(state["goal"] + "\n根据修复及验证反馈重新规划复查：" + feedback, state["project_path"], state.get("business_scenario", ""))
+    if not any(step["agent"] == "code_reviewer" for step in plan["steps"]):
+        plan["steps"].append({"agent": "code_reviewer", "objective": "复查修复后的代码风险"})
+    for agent in state.get("completed_agents", []):
+        if not any(step["agent"] == agent for step in plan["steps"]):
+            plan["steps"].append({"agent": agent, "objective": "刷新候选副本的项目证据"})
+    return {"execution_plan": plan, "planning": metadata, "plan": [f"{s['agent']}: {s['objective']}" for s in plan["steps"]],
+            "events": _append_event(state, "replanner", "planner", "依据验证反馈重新规划，开始复查候选修复")}
 
 
 def _supervisor_node(state: StudioState) -> StudioState:
@@ -186,6 +239,12 @@ def _llm_supervisor_notes(
 
 
 def _should_review(state: StudioState) -> str:
+    options = state.get("repair_options", {})
+    result = state.get("repair_result", {})
+    findings = state.get("code_review", {}).get("findings", [])
+    if options.get("enabled") and state.get("repair_round", 0) < options.get("max_rounds", 2):
+        if (findings or result.get("status") == "validation_failed") and result.get("status") not in {"no_changes", "invalid_patch", "no_editable_evidence"}:
+            return "repair"
     return "review" if state["quality_gate"]["review_required"] else "report"
 
 
@@ -230,6 +289,8 @@ def collaboration_result(state: StudioState) -> dict[str, Any]:
         "review_comment": state.get("review_comment", ""),
         "final_report": state.get("final_report", ""), "report_generation": state.get("report_generation", {}),
         "evidence": evidence_records(state),
+        "parallel_workers": state.get("parallel_workers", False),
+        "repair_result": state.get("repair_result"), "repair_history": state.get("repair_history", []),
         "project_analysis": summaries["project_analyzer"], "code_review": summaries["code_reviewer"],
         "rag_result": summaries["rag_processor"], "events": state.get("events", []),
     }
@@ -247,6 +308,9 @@ def _reporter_node(state: StudioState) -> StudioState:
     if not isinstance(response.get("text"), str) or not response["text"].strip():
         response = {**response, "text": _build_collaboration_report(state), "answer_source": "fallback", "fallback_used": True}
     report = response["text"] + "\n\n" + evidence_markdown(state)
+    if state.get("repair_result"):
+        result = state["repair_result"]
+        report += f"\n\n## 修复验证\n\n- 状态：{result['status']}\n- 轮次：{state.get('repair_round', 0)}\n- 结果来自候选副本，尚未应用到原项目。\n- 验证：{result.get('validation', {}).get('kind', '未执行')}"
     generation = {"source": response.get("answer_source", "fallback"), "trace_id": response.get("trace_id"),
                   "fallback_used": bool(response.get("fallback_used"))}
     updated = {**state, "final_report": report, "report_generation": generation,
@@ -340,11 +404,17 @@ def _build_collaboration_graph(checkpointer=None):
     graph.add_node("review_gate", _prepare_review)
     graph.add_node("human_review", _human_review_node)
     graph.add_node("reporter", _reporter_node)
+    graph.add_node("repair", _repair_node)
+    graph.add_node("replanner", _replan_node)
     graph.set_entry_point("planner")
     destinations = {agent: agent for agent in (*AGENTS, "supervisor")}
-    for node in ("planner", *AGENTS):
+    for node in ("planner", "replanner"):
+        graph.add_conditional_edges(node, _dispatch_workers, destinations)
+    for node in AGENTS:
         graph.add_conditional_edges(node, _next_worker, destinations)
-    graph.add_conditional_edges("supervisor", _should_review, {"review": "review_gate", "report": "reporter"})
+    graph.add_conditional_edges("supervisor", _should_review, {"review": "review_gate", "report": "reporter", "repair": "repair"})
+    graph.add_conditional_edges("repair", lambda state: "replan" if state["repair_result"].get("workspace") else "review",
+                               {"replan": "replanner", "review": "review_gate"})
     graph.add_edge("review_gate", "human_review")
     graph.add_conditional_edges("human_review", lambda state: "report" if state["review_decision"] == "approved" else "stop",
                                {"report": "reporter", "stop": END})

@@ -24,6 +24,7 @@ It is deliberately not a code-writing IDE. Its focus is making software delivery
 
 - **Multi-agent workflows, not isolated prompts**: Planner, Project Analyzer, Code Reviewer, RAG Processor, Supervisor, and Reporter are composed through LangGraph.
 - **Executable collaboration plans**: validated plans select and order real workers. Deterministic risk checks pause for durable human review; approval resumes without repeating completed workers, rejection stops before reporting, and failed runs can recover from checkpoints. Reports include file/line evidence and explicit scope limits. See [Agent execution and remaining boundaries](docs/AGENT_EXECUTION.md).
+- **Bounded repair loops and task budgets**: run independent workers in parallel, generate candidate edits in a project copy, validate them with Python syntax checks or pytest, and replan from validation feedback. Preview the diff and apply after review. Per-task token and USD budgets reserve capacity atomically and pause before an unaffordable call; unknown prices are explicitly shown. See [Autonomy and cost accounting](docs/AGENT_AUTONOMY.md).
 - **Governed runtime**: Harness Runtime provides task context, event timelines, artifacts, review state, persistence, deterministic policy checks, and resume support.
 - **Live progress and usable history**: committed task events stream during execution; task history supports keyword search, status filters, and server-side pagination. Saved reports can be downloaded as Markdown.
 - **Visual workflows that execute**: a drag-and-drop canvas is compiled into executable LangGraph workflows instead of serving as a static diagram.
@@ -85,6 +86,12 @@ The screenshots below show the redesigned workbench: grouped navigation, a focus
 ## Architecture
 
 Agent 执行层已补齐可执行计划、真实人工暂停、协作失败恢复及文件/行号证据。`workflow.run` 也已接入真实节点执行。待审核摘要与正式报告分开，未执行的检查明确标注；修改审核意见暂不触发自动重规划。实现细节、验证结果和仍未实现的能力见 [Agent 执行说明](docs/AGENT_EXECUTION.md)。
+
+现在还支持独立 Agent 并行、最多 3 轮的候选修复与反馈重规划，以及任务级 token / USD 预算。工作台显示运行前粗估和执行中用量；预算不足时暂停，可提高预算后继续。修复在副本中验证，通过审核后显式应用，原文件发生变化时拒绝覆盖。使用方式和限制见 [自主执行与费用预算](docs/AGENT_AUTONOMY.md)。
+
+下图为隔离测试项目的实际验收页面，模型响应和 token 用量为受控测试数据；差异、pytest 验证、预算账本与应用操作走真实执行路径，不代表付费模型的质量或价格。
+
+![Candidate repair and task usage in an isolated acceptance fixture](docs/assets/agent-autonomy-preview.png)
 
 ```text
 User / React workbench

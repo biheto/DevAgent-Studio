@@ -83,6 +83,9 @@ export type TaskResultPayload = {
   final_report?: string;
   draft_report?: string;
   resume_checkpoint?: { durable?: boolean; run_id?: string };
+  budget_usage?: BudgetUsage;
+  repair_result?: RepairResult;
+  execution_error?: string;
   mermaid?: string;
   suggestions?: string[];
   suggestion_records?: SuggestionRecord[];
@@ -98,6 +101,28 @@ export type TaskResultPayload = {
     edges: WorkflowEdge[];
   };
   validation?: WorkflowValidation;
+};
+
+export type BudgetOptions = {
+  max_cost_usd: number | null;
+  max_tokens: number | null;
+  output_tokens_per_call: number;
+  input_price_per_1m: number | null;
+  output_price_per_1m: number | null;
+};
+export type AgentOptions = {
+  parallel_workers: boolean;
+  repair_options: { enabled: boolean; max_rounds: number; validation: 'python_compile' | 'pytest' };
+  budget: BudgetOptions;
+};
+export type BudgetUsage = {
+  options: BudgetOptions; currency: string; calls: number; reported_tokens: number;
+  accounted_tokens: number; estimated_cost_usd: number | null; reserved_calls: number; uncertain_calls: number;
+};
+export type CostEstimate = { estimated_cost_usd: number | null; estimated_tokens: number; basis: string };
+export type RepairResult = {
+  status: string; round: number; reason?: string; diff?: string; changed_files?: string[]; applied?: boolean;
+  validation?: { passed: boolean; kind: string; output: string };
 };
 
 export type ResumeSnapshot = {

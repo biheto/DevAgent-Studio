@@ -66,7 +66,7 @@ export function TaskHistory({selectedTaskId, onOpen, disabled}: {
     if (selectedTaskId && !disabled) void open(selectedTaskId);
   }
 
-  const statuses = ['created', 'running', 'waiting_review', 'completed', 'failed', 'partial_success', 'cancelled', 'rejected'];
+  const statuses = ['created', 'running', 'waiting_review', 'budget_paused', 'completed', 'failed', 'partial_success', 'cancelled', 'rejected'];
   return <div className="task-history">
     <div className="history-filters">
       <label className="history-search"><span className="sr-only">搜索历史任务</span><Search size={16} />

@@ -933,6 +933,9 @@ def run_collaboration_task_api(request: TaskRunRequest) -> TaskRunResponse:
         "max_files": request.max_files,
         "require_human_review": request.require_human_review,
         "input_text": request.input_text or request.goal,
+        "parallel_workers": request.parallel_workers,
+        "repair_options": request.repair_options.model_dump(),
+        "budget": request.budget.model_dump(),
     }
     try:
         result = harness_runtime.run_graph(context, run_collaboration_task, input_state)

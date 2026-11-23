@@ -1,4 +1,5 @@
 import { consumeTaskEventStream } from './event-stream';
+import type { AgentOptions, BudgetOptions, BudgetUsage, CostEstimate } from './types';
 import {
   AgentEvent,
   AskResponse,
@@ -42,6 +43,30 @@ import {
 
 const API_BASE = '';
 
+export async function estimateTask(payload: AgentOptions & { goal: string; max_files: number }, signal?: AbortSignal): Promise<CostEstimate> {
+  const response = await fetch('/api/v1/tasks/estimate', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload), signal });
+  if (!response.ok) throw await apiError(response, '费用预估失败');
+  return response.json();
+}
+
+export async function taskBudget(taskId: string): Promise<BudgetUsage> {
+  const response = await fetch(`/api/v1/tasks/${taskId}/budget`);
+  if (!response.ok) throw await apiError(response, '预算读取失败');
+  return response.json();
+}
+
+export async function updateTaskBudget(taskId: string, budget: BudgetOptions) {
+  const response = await fetch(`/api/v1/tasks/${taskId}/budget`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(budget) });
+  if (!response.ok) throw await apiError(response, '预算更新失败');
+  return response.json();
+}
+
+export async function applyTaskRepair(taskId: string) {
+  const response = await fetch(`/api/v1/tasks/${taskId}/repair/apply`, { method: 'POST' });
+  if (!response.ok) throw await apiError(response, '修复应用失败');
+  return response.json();
+}
+
 export async function runBusinessScenarioStream(
   payload: {
     business_scenario: BusinessScenarioCode;
@@ -53,6 +78,9 @@ export async function runBusinessScenarioStream(
     pr_head?: string;
     pr_url?: string;
     post_comment?: boolean;
+    parallel_workers?: boolean;
+    repair_options?: AgentOptions['repair_options'];
+    budget?: BudgetOptions;
   },
   onEvent: (event: AgentEvent | Record<string, unknown>) => void,
 ) {
@@ -80,6 +108,9 @@ export async function runTaskStream(
     input_text: string;
     nodes: WorkflowNode[];
     edges: WorkflowEdge[];
+    parallel_workers?: boolean;
+    repair_options?: AgentOptions['repair_options'];
+    budget?: BudgetOptions;
   },
   onEvent: (event: AgentEvent | Record<string, unknown>) => void,
 ) {
@@ -106,6 +137,9 @@ export async function runCollaborationTaskStream(
     input_text: string;
     nodes: WorkflowNode[];
     edges: WorkflowEdge[];
+    parallel_workers?: boolean;
+    repair_options?: AgentOptions['repair_options'];
+    budget?: BudgetOptions;
   },
   onEvent: (event: AgentEvent | Record<string, unknown>) => void,
 ) {

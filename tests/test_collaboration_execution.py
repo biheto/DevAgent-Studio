@@ -1,4 +1,5 @@
 import json
+import threading
 from types import SimpleNamespace
 
 import pytest
@@ -13,6 +14,109 @@ from app.main import app
 from app.persistence import sqlite_store
 from app.persistence.sqlite_store import SQLiteTaskStore
 from app.schemas.studio import TaskRunRequest
+
+
+def test_parallel_workers_overlap_and_merge_outputs(rig, monkeypatch):
+    barrier = threading.Barrier(3, timeout=5)
+    for graph in (graphs.project_analyzer_graph, graphs.code_review_graph, graphs.rag_process_graph):
+        original = graph.invoke
+        def invoke(value, original=original):
+            barrier.wait()
+            return original(value)
+        monkeypatch.setattr(graph, "invoke", invoke)
+    response = routes.run_collaboration_task_api(TaskRunRequest(goal="review", project_path="fixture", parallel_workers=True))
+    assert response.status == "waiting_review"
+    assert set(response.result["completed_agents"]) == set(rig.agents)
+    events = response.result["events"]
+    assert len({event["event_id"] for event in events}) == len(events)
+    assert sum(event["node"] == "supervisor" for event in events) == 1
+
+
+def test_parallel_recovery_does_not_repeat_successful_siblings(rig):
+    rig.fail_agent = "code_reviewer"
+    response = routes.run_collaboration_task_api(TaskRunRequest(goal="review", project_path="fixture", parallel_workers=True))
+    assert response.status == "failed"
+    resumed = rig.client.post(f"/api/v1/tasks/{response.task_id}/recover")
+    assert resumed.status_code == 200 and resumed.json()["status"] == "waiting_review"
+    assert rig.calls.count("code_reviewer") == 2
+    assert rig.calls.count("project_analyzer") == rig.calls.count("rag_processor") == 1
+
+
+def test_parallel_workers_share_task_budget_context(rig, monkeypatch):
+    from app.harness import budget
+    provider = SimpleNamespace(_read_env_file=lambda: {}, _agent_env_key=lambda m: m, _read_env_value=lambda *_: "")
+    for graph in (graphs.project_analyzer_graph, graphs.code_review_graph, graphs.rag_process_graph):
+        original = graph.invoke
+        def invoke(value, original=original):
+            assert budget.active_task.get()
+            budget.reserve(provider, "worker", "test", "x")
+            return original(value)
+        monkeypatch.setattr(graph, "invoke", invoke)
+    response = routes.run_collaboration_task_api(TaskRunRequest(goal="review", project_path="fixture", parallel_workers=True, budget={"max_tokens": 2400}))
+    assert response.status == "budget_paused"
+    assert budget.snapshot(response.task_id)["calls"] == 1
+
+
+def test_repair_replans_from_failed_validation_and_applies_only_after_review(rig, tmp_path, monkeypatch):
+    from pathlib import Path
+    monkeypatch.setenv("DEV_AGENT_REPAIR_DIR", str(tmp_path / "repairs"))
+    project = tmp_path / "project"
+    project.mkdir()
+    source = project / "answer.py"
+    source.write_text("def answer():\n    return 1\n", encoding="utf-8")
+    original = graphs.llm_provider.generate_with_status
+    repair_calls = []
+    def generate(system, prompt, fallback, **options):
+        if options["agent"] != "repairer":
+            return original(system, prompt, fallback, **options)
+        data = json.loads(prompt)
+        repair_calls.append(data)
+        old = "return 1" if len(repair_calls) == 1 else "return ("
+        new = "return (" if len(repair_calls) == 1 else "return 2"
+        return {"text": json.dumps({"reason": "fix answer", "edits": [{"path": "answer.py", "old_text": old, "new_text": new}]}), "answer_source": "llm"}
+    monkeypatch.setattr(graphs.llm_provider, "generate_with_status", generate)
+    monkeypatch.setattr(graphs.code_review_graph, "invoke", lambda state: {"result": {
+        "score": 95, "findings": [] if "return 2" in (Path(state["project_path"]) / "answer.py").read_text() else
+        [{"path": "answer.py", "line": 2, "severity": "high", "message": "wrong answer"}],
+    }})
+    response = routes.run_collaboration_task_api(TaskRunRequest(goal="fix answer", project_path=str(project), parallel_workers=True,
+        repair_options={"enabled": True, "max_rounds": 2}))
+    assert response.status == "waiting_review"
+    assert response.result["repair_result"]["status"] == "validated"
+    assert len(repair_calls) == 2 and not repair_calls[1]["previous_validation"]["passed"]
+    assert [r["status"] for r in response.result["repair_history"]] == ["validation_failed", "validated"]
+    assert "return 1" in source.read_text()
+    assert rig.client.post(f"/api/v1/tasks/{response.task_id}/repair/apply").status_code == 409
+    assert rig.client.post(f"/api/v1/tasks/{response.task_id}/approve", json={}).status_code == 200
+    applied = rig.client.post(f"/api/v1/tasks/{response.task_id}/repair/apply")
+    assert applied.status_code == 200, applied.text
+    assert "return 2" in source.read_text()
+    assert rig.client.post(f"/api/v1/tasks/{response.task_id}/repair/apply").status_code == 200
+
+
+def test_budget_pause_and_recovery_use_persisted_ledger(rig, monkeypatch):
+    from app.providers.llm_provider import LLMProvider
+    from app.harness.budget import snapshot
+    from types import SimpleNamespace
+    calls = []
+    def invoke(messages):
+        calls.append(messages)
+        text = json.dumps({"steps": [{"agent": "code_reviewer", "objective": "review"}]}) if "规划器" in messages[0][1] else "report"
+        return SimpleNamespace(content=text, usage_metadata={"input_tokens": 100, "output_tokens": 50})
+    monkeypatch.setattr(graphs.llm_provider, "generate_with_status", LLMProvider.generate_with_status.__get__(graphs.llm_provider))
+    monkeypatch.setattr(graphs.llm_provider, "_config", lambda *_: {"api_key": "fake", "model": "test", "base_url": ""})
+    monkeypatch.setattr(graphs.llm_provider, "_resolve_prompt", lambda _a, version, system, **_: (system, version))
+    monkeypatch.setattr(graphs.llm_provider, "_build_chat_openai", lambda *_: SimpleNamespace(invoke=invoke))
+    monkeypatch.setattr(graphs.llm_provider, "_save_trace", lambda **_: None)
+    response = routes.run_collaboration_task_api(TaskRunRequest(goal="review", project_path="fixture", budget={"max_tokens": 1}))
+    assert response.status == "budget_paused" and not calls
+    updated = rig.client.put(f"/api/v1/tasks/{response.task_id}/budget", json={"max_tokens": 100000})
+    assert updated.status_code == 200
+    resumed = rig.client.post(f"/api/v1/tasks/{response.task_id}/recover")
+    assert resumed.json()["status"] == "waiting_review"
+    assert snapshot(response.task_id)["reported_tokens"] == 150
+    assert rig.client.post(f"/api/v1/tasks/{response.task_id}/approve", json={}).status_code == 200
+    assert snapshot(response.task_id)["reported_tokens"] == 300
 
 
 @pytest.fixture

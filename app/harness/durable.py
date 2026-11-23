@@ -124,7 +124,7 @@ def execute_operation(node: dict, state: dict, outputs: dict, execute):
 
 def execute_graph(build, definition: dict, initial: dict, action: str | None = None) -> dict:
     run_id = str(initial["task_id"])
-    config = {"configurable": {"thread_id": run_id}}
+    config = {"configurable": {"thread_id": run_id}, "recursion_limit": 100}
     initial = {**initial, "durable_run_id": run_id}
     with run_lease(run_id, definition, initial), SqliteSaver.from_conn_string(str(checkpoint_path())) as saver:
         graph = build(saver)
@@ -132,7 +132,8 @@ def execute_graph(build, definition: dict, initial: dict, action: str | None = N
             try:
                 return graph.invoke(value, config, durability="sync")
             except Exception as exc:
-                return {**dict(graph.get_state(config).values), "execution_status": "failed", "execution_error": str(exc)}
+                from app.harness.budget import BudgetExceeded
+                return {**initial, **dict(graph.get_state(config).values), "execution_status": "budget_paused" if isinstance(exc, BudgetExceeded) else "failed", "execution_error": str(exc)}
         snapshot = graph.get_state(config)
         pending_interrupts = [item for task in snapshot.tasks for item in task.interrupts]
         if pending_interrupts:
@@ -163,7 +164,7 @@ def execute_graph(build, definition: dict, initial: dict, action: str | None = N
                 latest[event.get("node")] = event.get("status")
             result.setdefault("execution_status", "cancelled" if "cancelled" in latest.values() else
                               "partial_success" if "failed" in latest.values() else "completed")
-        if result["execution_status"] in {"failed", "waiting_review"}:
+        if result["execution_status"] in {"failed", "waiting_review", "budget_paused"}:
             next_nodes = graph.get_state(config).next
             result["durable_checkpoint"] = {"durable": True, "run_id": run_id,
                 "paused_node_id": (result.get("human_review_packet") or {}).get("node_id") or (next_nodes[0] if next_nodes else "resume"),

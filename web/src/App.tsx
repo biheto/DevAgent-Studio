@@ -25,6 +25,9 @@ import {
 } from 'lucide-react';
 import { CSSProperties, FormEvent, PointerEvent, ReactNode, Ref, useEffect, useMemo, useRef, useState } from 'react';
 import { WorkbenchShell, statusLabel, type ViewKey } from './components/WorkbenchShell';
+import { AgentExecutionControls, AgentExecutionResult, defaultAgentOptions } from './components/AgentExecution';
+import { applyTaskRepair, updateTaskBudget } from './api';
+import type { BudgetOptions, BudgetUsage, RepairResult } from './types';
 import { TaskHistory, ReportDownload } from './components/TaskHistory';
 import { extractMentorView, extractMarkdownSection, deriveModules, joinProjectPath, buildFocusedFileWorkflow, normalizeNodes, edgeKeyFor, buildLocalMermaid, firstLine, deriveToolCalls, deriveAgentOutputs, formatToolCall, formatAgentOutput, extractTaskResultArtifact, extractResumeSnapshots, deriveResumeSnapshots, summarizeResumeState, summarizeValue, parseMarkdown, parseMermaid } from './workflow/presentation';
 import {
@@ -231,6 +234,10 @@ export function App() {
   const [projectPath, setProjectPath] = useState(defaultProjectPath);
   const [maxFiles, setMaxFiles] = useState(100);
   const [requireReview, setRequireReview] = useState(true);
+  const [agentOptions, setAgentOptions] = useState(defaultAgentOptions);
+  const [budgetUsage, setBudgetUsage] = useState<BudgetUsage>();
+  const [repairResult, setRepairResult] = useState<RepairResult>();
+  const [executionError, setExecutionError] = useState('');
   const [running, setRunning] = useState(false);
   const [events, setEvents] = useState<AgentEvent[]>([]);
   const [tasks, setTasks] = useState<TaskSummary[]>([]);
@@ -683,6 +690,9 @@ export function App() {
       setSelectedTaskId(result.task_id);
       setFinalReport(result.final_report ?? '');
       setDraftReport(result.draft_report ?? '');
+      setBudgetUsage(result.budget_usage);
+      setRepairResult(result.repair_result);
+      setExecutionError(result.execution_error ?? '');
       setCanRecover(result.status === 'failed' && Boolean(result.resume_checkpoint?.durable));
       setMermaid(result.mermaid ?? '');
       setSuggestions(result.suggestions ?? []);
@@ -708,6 +718,7 @@ export function App() {
   }
 
   function resetRunOutput() {
+    setBudgetUsage(undefined); setRepairResult(undefined); setExecutionError('');
     setCanRecover(false);
     setRecoveryError('');
     setDraftReport('');
@@ -765,6 +776,7 @@ export function App() {
       await runner(
         {
           goal: nextGoal,
+          ...(mode === 'collaboration' ? agentOptions : {}),
           project_path: nextProjectPath,
           max_files: nextMaxFiles,
           require_human_review: requireReview,
@@ -792,6 +804,7 @@ export function App() {
       resetRunOutput();
       try {
         await runBusinessScenarioStream({
+          ...(businessScenario !== 'pr_review' ? agentOptions : {}),
           business_scenario: businessScenario,
           project_path: projectPath,
           goal,
@@ -852,6 +865,7 @@ export function App() {
   }
 
   async function restoreTaskContext(taskId: string) {
+    setBudgetUsage(undefined); setRepairResult(undefined); setExecutionError('');
     setCanRecover(false);
     setRecoveryError('');
     setDraftReport('');
@@ -874,6 +888,9 @@ export function App() {
     setEvents(taskEvents);
     setFinalReport(taskResult.final_report ?? taskDetail.task.final_report ?? '');
     setDraftReport(taskResult.draft_report ?? '');
+    setBudgetUsage(taskResult.budget_usage);
+    setRepairResult(taskResult.repair_result);
+    setExecutionError(taskResult.execution_error ?? '');
     setCanRecover(taskDetail.task.status === 'failed' && Boolean(taskResult.resume_checkpoint?.durable));
     setMermaid(taskResult.mermaid ?? '');
     setSuggestions(taskResult.suggestions ?? []);
@@ -899,6 +916,26 @@ export function App() {
     } finally {
       setRunning(false);
     }
+  }
+
+  async function handleBudgetResume(budget: BudgetOptions) {
+    if (!latestTaskId || running) return;
+    setRunning(true);
+    try {
+      await updateTaskBudget(latestTaskId, budget);
+      await recoverTask(latestTaskId);
+      await refreshTasks();
+      await loadTaskContext(latestTaskId);
+    } finally { setRunning(false); }
+  }
+
+  async function handleApplyRepair() {
+    if (!latestTaskId || running) return;
+    setRunning(true);
+    try {
+      await applyTaskRepair(latestTaskId);
+      await loadTaskContext(latestTaskId);
+    } finally { setRunning(false); }
   }
 
   async function handleReview(action: 'approve' | 'reject' | 'revise') {
@@ -1403,6 +1440,7 @@ export function App() {
               }} />
               <ModeHint executionMode={executionMode} />
               <RunForm
+                agentControls={(executionMode === 'collaboration' || businessScenario === 'onboarding' || businessScenario === 'governance') ? <AgentExecutionControls value={agentOptions} onChange={setAgentOptions} goal={goal} maxFiles={maxFiles} disabled={running} /> : undefined}
                 goal={goal}
                 projectPath={projectPath}
                 maxFiles={maxFiles}
@@ -1438,6 +1476,7 @@ export function App() {
                 />
               ) : null}
               <ResumePanel snapshots={resumeSnapshots} events={events} />
+              <AgentExecutionResult taskId={latestTaskId} running={running} status={latestStatus} usage={budgetUsage} repair={repairResult} executionError={executionError} onBudgetResume={handleBudgetResume} onApply={handleApplyRepair} />
               <EventDetail event={selectedEvent} />
               <OutputList title="工具调用" empty="暂无工具调用" items={visibleToolCalls.map(formatToolCall)} />
               <OutputList title="Agent 输出" empty="暂无 Agent 输出" items={visibleAgentOutputs.map(formatAgentOutput)} />
@@ -1501,6 +1540,7 @@ export function App() {
             <div className="panel report-card markdown-card report-tab-card">
               <PanelTitle icon={<FileText size={17} />} title="报告中心" action={<ReportDownload taskId={latestTaskId} available={Boolean(finalReport) && !running} />} />
               <ReportTabs active={reportTab} onChange={setReportTab} />
+              <AgentExecutionResult taskId={latestTaskId} running={running} status={latestStatus} usage={budgetUsage} repair={repairResult} executionError={executionError} onBudgetResume={handleBudgetResume} onApply={handleApplyRepair} />
               {reportTab === 'final' ? <MarkdownView text={finalReport || draftReport || '运行任务后，这里会显示格式化后的最终报告。'} /> : null}
               {reportTab === 'mentor' ? <MarkdownView text={extractMentorView(finalReport)} /> : null}
               {reportTab === 'mermaid' ? <MermaidDiagram source={mermaid || buildLocalMermaid(nodes, edges)} /> : null}
@@ -1675,6 +1715,7 @@ export function App() {
             <div className="panel report-preview-panel">
               <PanelTitle icon={<FileText size={17} />} title="报告预览" action={<ReportDownload taskId={latestTaskId} available={Boolean(finalReport) && !running} />} />
               <MarkdownView text={finalReport || draftReport || '选择历史任务后查看报告。'} />
+              <AgentExecutionResult taskId={latestTaskId} running={running} status={latestStatus} usage={budgetUsage} repair={repairResult} executionError={executionError} onBudgetResume={handleBudgetResume} onApply={handleApplyRepair} />
             </div>
           </section>
         ) : null}
@@ -1835,6 +1876,7 @@ function AnalysisGuide({ onApply }: { onApply: (mode: ExecutionMode, prompt: str
 }
 
 function RunForm({
+  agentControls,
   goal,
   projectPath,
   maxFiles,
@@ -1847,6 +1889,7 @@ function RunForm({
   onRequireReviewChange,
   onSubmit,
 }: {
+  agentControls?: ReactNode;
   goal: string;
   projectPath: string;
   maxFiles: number;
@@ -1883,6 +1926,7 @@ function RunForm({
         </label>
       </div>
       </details>
+      {agentControls}
       <button className="primary" disabled={running || !goal.trim() || !projectPath.trim()} type="submit" aria-busy={running}>
         {running ? <RefreshCw className="spin" size={17} /> : <Play size={17} />}
         {running ? '执行中...' : submitLabel}

@@ -92,6 +92,8 @@ def quality_gate(state: dict) -> dict:
         reasons.append("治理建议要求人工确认")
     if state.get("require_human_review", True):
         reasons.append("任务配置要求人工审核")
+    if state.get("repair_result"):
+        reasons.append("候选修复需要人工核对；验证通过不代表所有问题已解决")
     executed = state.get("completed_agents", [])
     gaps = []
     if "code_reviewer" not in executed:
