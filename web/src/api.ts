@@ -1,3 +1,4 @@
+import { consumeTaskEventStream } from './event-stream';
 import {
   AgentEvent,
   AskResponse,
@@ -32,6 +33,7 @@ import {
   SkillVersionSnapshot,
   TaskDetail,
   TaskSummary,
+  TaskPage,
   WorkflowEdge,
   WorkflowNode,
   WorkflowRecord,
@@ -39,25 +41,6 @@ import {
 } from './types';
 
 const API_BASE = '';
-
-async function consumeEventStream(response: Response, onEvent: (event: AgentEvent | Record<string, unknown>) => void) {
-  if (!response.ok || !response.body) throw await apiError(response, 'Task stream failed');
-  const reader = response.body.getReader();
-  const decoder = new TextDecoder('utf-8');
-  let buffer = '';
-  while (true) {
-    const { value, done } = await reader.read();
-    if (done) break;
-    buffer += decoder.decode(value, { stream: true });
-    const chunks = buffer.split('\n\n');
-    buffer = chunks.pop() ?? '';
-    for (const chunk of chunks) {
-      const line = chunk.split('\n').find((item) => item.startsWith('data: '));
-      const raw = line?.slice(6).trim();
-      if (raw) onEvent(JSON.parse(raw));
-    }
-  }
-}
 
 export async function runBusinessScenarioStream(
   payload: {
@@ -78,7 +61,7 @@ export async function runBusinessScenarioStream(
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(payload),
   });
-  await consumeEventStream(response, onEvent);
+  await consumeTaskEventStream(response, onEvent);
 }
 
 async function apiError(response: Response, fallback: string): Promise<Error> {
@@ -109,27 +92,7 @@ export async function runTaskStream(
       edges: payload.edges,
     }),
   });
-  if (!response.ok || !response.body) {
-    throw new Error(`任务启动失败：${response.status}`);
-  }
-
-  const reader = response.body.getReader();
-  const decoder = new TextDecoder('utf-8');
-  let buffer = '';
-
-  while (true) {
-    const { value, done } = await reader.read();
-    if (done) break;
-    buffer += decoder.decode(value, { stream: true });
-    const chunks = buffer.split('\n\n');
-    buffer = chunks.pop() ?? '';
-    for (const chunk of chunks) {
-      const line = chunk.split('\n').find((item) => item.startsWith('data: '));
-      if (!line) continue;
-      const raw = line.slice(6).trim();
-      if (raw) onEvent(JSON.parse(raw));
-    }
-  }
+  await consumeTaskEventStream(response, onEvent);
 }
 
 export async function runCollaborationTaskStream(
@@ -156,34 +119,38 @@ export async function runCollaborationTaskStream(
       edges: [],
     }),
   });
-  if (!response.ok || !response.body) {
-    throw new Error(`Collaboration task failed: ${response.status}`);
-  }
+  await consumeTaskEventStream(response, onEvent);
+}
 
-  const reader = response.body.getReader();
-  const decoder = new TextDecoder('utf-8');
-  let buffer = '';
-
-  while (true) {
-    const { value, done } = await reader.read();
-    if (done) break;
-    buffer += decoder.decode(value, { stream: true });
-    const chunks = buffer.split('\n\n');
-    buffer = chunks.pop() ?? '';
-    for (const chunk of chunks) {
-      const line = chunk.split('\n').find((item) => item.startsWith('data: '));
-      if (!line) continue;
-      const raw = line.slice(6).trim();
-      if (raw) onEvent(JSON.parse(raw));
-    }
+export async function searchTasks(
+  options: { q?: string; status?: string; limit?: number; offset?: number } = {},
+  signal?: AbortSignal,
+): Promise<TaskPage> {
+  const params = new URLSearchParams();
+  for (const [key, value] of Object.entries(options)) {
+    if (value !== undefined && value !== '') params.set(key, String(value));
   }
+  const response = await fetch(`${API_BASE}/api/v1/tasks?${params}`, {signal});
+  if (!response.ok) throw await apiError(response, '任务列表读取失败');
+  return response.json();
 }
 
 export async function listTasks(): Promise<TaskSummary[]> {
-  const response = await fetch(`${API_BASE}/api/v1/tasks`);
-  if (!response.ok) throw new Error('任务列表读取失败');
-  const data = await response.json();
-  return data.tasks ?? [];
+  return (await searchTasks({limit: 20})).tasks;
+}
+
+export async function downloadTaskReport(taskId: string): Promise<void> {
+  const response = await fetch(`${API_BASE}/api/v1/tasks/${encodeURIComponent(taskId)}/report/download`);
+  if (!response.ok) throw await apiError(response, '报告下载失败');
+  const blob = await response.blob();
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = `devagent-${taskId.replace(/[^a-zA-Z0-9_-]/g, '_')}.md`;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
 export async function getTaskDetail(taskId: string): Promise<TaskDetail> {

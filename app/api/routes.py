@@ -4,8 +4,10 @@ import json
 from collections.abc import AsyncIterator
 from uuid import uuid4
 
-from fastapi import APIRouter, BackgroundTasks, HTTPException, Header, Request
-from fastapi.responses import StreamingResponse
+from fastapi import APIRouter, BackgroundTasks, HTTPException, Header, Query, Request
+from fastapi.responses import Response, StreamingResponse
+
+from app.api.task_stream import task_stream_response
 
 from app.agents.marketplace_tools import check_permission, list_tools
 from app.benchmark_runner import (
@@ -164,19 +166,7 @@ def run_business_scenario_api(request: BusinessScenarioRequest) -> TaskRunRespon
 
 @router.post("/business-scenarios/run/stream", tags=["Business Scenarios"])
 async def run_business_scenario_stream(request: BusinessScenarioRequest) -> StreamingResponse:
-    async def event_stream() -> AsyncIterator[str]:
-        try:
-            response = run_business_scenario_api(request)
-            for event in response.events:
-                yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
-            payload = {"type": "task_result", "task_id": response.task_id, "status": response.status, **response.result}
-            yield f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
-        except Exception as exc:
-            yield f"data: {json.dumps({'type': 'error', 'content': str(exc)}, ensure_ascii=False)}\n\n"
-        finally:
-            yield "data: {\"type\": \"complete\", \"completed\": true}\n\n"
-
-    return StreamingResponse(event_stream(), media_type="text/event-stream")
+    return task_stream_response(lambda: run_business_scenario_api(request))
 
 
 @router.post("/projects/analyze", response_model=ProjectAnalyzeResponse, tags=["Project Analyzer"])
@@ -923,36 +913,7 @@ def run_task(request: TaskRunRequest) -> TaskRunResponse:
 
 @router.post("/tasks/run/stream", tags=["Task Runtime"])
 async def run_task_stream(request: TaskRunRequest) -> StreamingResponse:
-    async def event_stream() -> AsyncIterator[str]:
-        try:
-            response = run_task(request)
-            for event in response.events:
-                yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
-            payload = {
-                "type": "task_result",
-                "task_id": response.task_id,
-                "status": response.status,
-                "final_report": response.result.get("final_report"),
-                "mermaid": response.result.get("mermaid"),
-                "suggestions": response.result.get("suggestions"),
-                "suggestion_records": response.result.get("suggestion_records"),
-                "risk_level": response.result.get("risk_level"),
-                "review_required": response.result.get("review_required"),
-                "next_actions": response.result.get("next_actions"),
-                "governance": response.result.get("governance"),
-                "tool_calls": response.result.get("tool_calls"),
-                "agent_outputs": response.result.get("agent_outputs"),
-                "human_review_required": response.result.get("human_review_required"),
-                "planned_workflow": response.result.get("planned_workflow"),
-                "validation": response.result.get("validation"),
-            }
-            yield f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
-        except Exception as exc:
-            yield f"data: {json.dumps({'type': 'error', 'content': str(exc)}, ensure_ascii=False)}\n\n"
-        finally:
-            yield "data: {\"type\": \"complete\", \"completed\": true}\n\n"
-
-    return StreamingResponse(event_stream(), media_type="text/event-stream")
+    return task_stream_response(lambda: run_task(request))
 
 
 @router.post("/tasks/collaborate", response_model=TaskRunResponse, tags=["Task Runtime"])
@@ -982,39 +943,17 @@ def run_collaboration_task_api(request: TaskRunRequest) -> TaskRunResponse:
 
 @router.post("/tasks/collaborate/stream", tags=["Task Runtime"])
 async def run_collaboration_task_stream(request: TaskRunRequest) -> StreamingResponse:
-    async def event_stream() -> AsyncIterator[str]:
-        try:
-            response = run_collaboration_task_api(request)
-            for event in response.events:
-                yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
-            payload = {
-                "type": "task_result",
-                "task_id": response.task_id,
-                "status": response.status,
-                "final_report": response.result.get("final_report"),
-                "mermaid": response.result.get("mermaid"),
-                "suggestions": response.result.get("suggestions"),
-                "suggestion_records": response.result.get("suggestion_records"),
-                "risk_level": response.result.get("risk_level"),
-                "review_required": response.result.get("review_required"),
-                "next_actions": response.result.get("next_actions"),
-                "governance": response.result.get("governance"),
-                "tool_calls": response.result.get("tool_calls"),
-                "agent_outputs": response.result.get("agent_outputs"),
-                "human_review_required": response.result.get("human_review_required"),
-            }
-            yield f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
-        except Exception as exc:
-            yield f"data: {json.dumps({'type': 'error', 'content': str(exc)}, ensure_ascii=False)}\n\n"
-        finally:
-            yield "data: {\"type\": \"complete\", \"completed\": true}\n\n"
-
-    return StreamingResponse(event_stream(), media_type="text/event-stream")
+    return task_stream_response(lambda: run_collaboration_task_api(request))
 
 
 @router.get("/tasks", tags=["Task Runtime"])
-def list_tasks() -> dict[str, object]:
-    return {"tasks": task_store.list_tasks()}
+def list_tasks(
+    q: str = Query(default="", max_length=200),
+    status: str = Query(default="", max_length=40),
+    limit: int = Query(default=20, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
+) -> dict[str, object]:
+    return task_store.search_tasks(q=q.strip(), status=status, limit=limit, offset=offset)
 
 
 @router.get("/tasks/{task_id}", tags=["Task Runtime"])
@@ -1038,6 +977,23 @@ def get_task_report(task_id: str) -> dict[str, object]:
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
     return {"task_id": task_id, "final_report": task.get("final_report")}
+
+
+@router.get("/tasks/{task_id}/report/download", tags=["Task Runtime"])
+def download_task_report(task_id: str) -> Response:
+    task = task_store.get_task(task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+    report = task.get("final_report")
+    if not report or not report.strip():
+        raise HTTPException(status_code=409, detail="This task has no report yet.")
+    # Task IDs are normally generated UUIDs; quote for header safety for imported tasks too.
+    from urllib.parse import quote
+    filename = quote(f"devagent-{task_id}.md", safe="")
+    return Response(report, media_type="text/markdown; charset=utf-8", headers={
+        "Content-Disposition": f"attachment; filename*=UTF-8''{filename}",
+        "Cache-Control": "no-store",
+    })
 
 
 @router.post("/tasks/{task_id}/ask", response_model=TaskQuestionResponse, tags=["Task Runtime"])

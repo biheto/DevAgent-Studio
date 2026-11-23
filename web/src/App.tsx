@@ -25,6 +25,7 @@ import {
 } from 'lucide-react';
 import { CSSProperties, FormEvent, PointerEvent, ReactNode, Ref, useEffect, useMemo, useRef, useState } from 'react';
 import { WorkbenchShell, statusLabel, type ViewKey } from './components/WorkbenchShell';
+import { TaskHistory, ReportDownload } from './components/TaskHistory';
 import { extractMentorView, extractMarkdownSection, deriveModules, joinProjectPath, buildFocusedFileWorkflow, normalizeNodes, edgeKeyFor, buildLocalMermaid, firstLine, deriveToolCalls, deriveAgentOutputs, formatToolCall, formatAgentOutput, extractTaskResultArtifact, extractResumeSnapshots, deriveResumeSnapshots, summarizeResumeState, summarizeValue, parseMarkdown, parseMermaid } from './workflow/presentation';
 import {
   addKnowledgeNote,
@@ -303,6 +304,7 @@ export function App() {
   const [focusError, setFocusError] = useState('');
 
   const canvasRef = useRef<HTMLDivElement | null>(null);
+  const taskLoadVersion = useRef(0);
   const dragRef = useRef<{ id: string; dx: number; dy: number } | null>(null);
   const panRef = useRef<{ x: number; y: number; scrollLeft: number; scrollTop: number } | null>(null);
 
@@ -311,7 +313,9 @@ export function App() {
     const item = [...events].reverse().find((event) => event.task_id);
     return item?.task_id ?? selectedTaskId;
   }, [events, selectedTaskId]);
-  const latestStatus = [...events].reverse().find((event) => event.status)?.status ?? 'idle';
+  const latestStatus = running ? 'running' : [...events].reverse().find((event) =>
+    event.status && ['task', 'error', 'human_review', 'review_action'].includes(event.type ?? '')
+  )?.status ?? 'idle';
   const visibleToolCalls = useMemo(
     () => (toolCalls.length ? toolCalls : deriveToolCalls(events)),
     [toolCalls, events],
@@ -354,9 +358,9 @@ export function App() {
   }, []);
 
   useEffect(() => {
-    if (!['reports', 'chat', 'history'].includes(activeView) || selectedTaskId || !tasks.length) return;
+    if (!['reports', 'chat', 'history'].includes(activeView) || running || selectedTaskId || !tasks.length) return;
     loadTaskContext(tasks[0].task_id).catch(() => undefined);
-  }, [activeView, selectedTaskId, tasks]);
+  }, [activeView, selectedTaskId, tasks, running]);
 
   async function refreshTasks() {
     setTasks(await listTasks());
@@ -691,12 +695,15 @@ export function App() {
       }
     } else if (eventType === 'error') {
       setError(String((payload as { content?: unknown }).content ?? '任务执行失败'));
+      if (payload.task_id) setEvents(prev => [...prev, payload as AgentEvent]);
     } else if (eventType !== 'complete') {
       setEvents((prev) => [...prev, payload as AgentEvent]);
     }
   }
 
   function resetRunOutput() {
+    taskLoadVersion.current += 1;
+    setSelectedTaskId('');
     setRunning(true);
     setError('');
     setEvents([]);
@@ -824,6 +831,7 @@ export function App() {
   }
 
   async function openTask(taskId: string) {
+    if (running) throw new Error('当前任务正在执行，请完成后再切换历史任务。');
     setSelectedTaskId(taskId);
     await restoreTaskContext(taskId);
     setActiveView('history');
@@ -835,6 +843,9 @@ export function App() {
   }
 
   async function restoreTaskContext(taskId: string) {
+    const version = ++taskLoadVersion.current;
+    setFinalReport('');
+    setEvents([]);
     setSuggestions([]);
     setSuggestionRecords([]);
     setRiskLevel('low');
@@ -845,6 +856,7 @@ export function App() {
     setSelectedEvent(null);
     setResumeSnapshots([]);
     const [taskEvents, taskDetail] = await Promise.all([getTaskEvents(taskId), getTaskDetail(taskId)]);
+    if (version !== taskLoadVersion.current) return;
     const taskResult = extractTaskResultArtifact(taskDetail.artifacts);
     const resumeRecords = extractResumeSnapshots(taskDetail.artifacts);
     setEvents(taskEvents);
@@ -1453,7 +1465,7 @@ export function App() {
         {activeView === 'reports' ? (
           <section className="reports-page">
             <div className="panel report-card markdown-card report-tab-card">
-              <PanelTitle icon={<FileText size={17} />} title="报告中心" />
+              <PanelTitle icon={<FileText size={17} />} title="报告中心" action={<ReportDownload taskId={latestTaskId} available={Boolean(finalReport) && !running} />} />
               <ReportTabs active={reportTab} onChange={setReportTab} />
               {reportTab === 'final' ? <MarkdownView text={finalReport || '运行任务后，这里会显示格式化后的最终报告。'} /> : null}
               {reportTab === 'mentor' ? <MarkdownView text={extractMentorView(finalReport)} /> : null}
@@ -1618,15 +1630,15 @@ export function App() {
         {activeView === 'history' ? (
           <section className="page-grid history-page">
             <div className="panel history-list-panel">
-              <PanelTitle icon={<History size={17} />} title="历史任务" action={<button className="icon-button" onClick={refreshTasks}><RefreshCw size={15} /></button>} />
-              <TaskList tasks={tasks} selectedTaskId={selectedTaskId} onOpen={openTask} />
+              <PanelTitle icon={<History size={17} />} title="历史任务" />
+              <TaskHistory selectedTaskId={selectedTaskId} onOpen={openTask} disabled={running} />
             </div>
             <div className="panel timeline-large">
               <PanelTitle icon={<Activity size={17} />} title="任务事件回放" />
               <Timeline events={events} />
             </div>
             <div className="panel report-preview-panel">
-              <PanelTitle icon={<FileText size={17} />} title="报告预览" />
+              <PanelTitle icon={<FileText size={17} />} title="报告预览" action={<ReportDownload taskId={latestTaskId} available={Boolean(finalReport) && !running} />} />
               <MarkdownView text={finalReport || '选择历史任务后查看报告。'} />
             </div>
           </section>

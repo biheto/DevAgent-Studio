@@ -16,7 +16,7 @@ const destinations = [
   { view: 'benchmark', label: '效果评测', icon: Activity, group: '能力管理', hint: '运行基准测试，比较质量' },
 ] as const;
 
-export const statusLabel = (status: string) => ({ idle: '准备就绪', running: '正在执行', completed: '已完成', failed: '执行失败', waiting_review: '等待审核', approved: '已通过', rejected: '已拒绝', cancelled: '已取消' }[status] || status);
+export const statusLabel = (status: string) => ({ idle: '准备就绪', created: '已创建', running: '正在执行', completed: '已完成', failed: '执行失败', partial_success: '部分成功', waiting_review: '等待审核', approved: '已通过', rejected: '已拒绝', cancelled: '已取消' }[status] || status);
 
 function Brand() {
   return <div className="studio-brand"><img className="studio-mark" src="/assets/favicon.svg?v=devagent-d1" width={32} height={32} alt="" aria-hidden="true" /><span>DevAgent<span className="brand-suffix">Studio</span></span></div>;

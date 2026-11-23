@@ -5,7 +5,7 @@ import sqlite3
 from pathlib import Path
 from typing import Any
 
-from app.harness.events import utc_now_iso
+from app.harness.events import publish_event, utc_now_iso
 
 
 class SQLiteTaskStore:
@@ -34,6 +34,8 @@ class SQLiteTaskStore:
                 )
                 """
             )
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_task_created ON agent_task(created_at)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_task_status_created ON agent_task(status, created_at)")
             conn.execute(
                 """
                 CREATE TABLE IF NOT EXISTS agent_task_event (
@@ -395,6 +397,9 @@ class SQLiteTaskStore:
                 ),
             )
 
+        # Notify only after commit: a disconnected browser can retrieve this event later.
+        publish_event({**event, "event_id": event_id})
+
     def save_artifact(self, task_id: str, artifact_type: str, name: str, content: Any) -> None:
         with self._connect() as conn:
             conn.execute(
@@ -415,6 +420,32 @@ class SQLiteTaskStore:
                 """
             ).fetchall()
         return [dict(row) for row in rows]
+
+    def search_tasks(
+        self, *, q: str = "", status: str = "", limit: int = 20, offset: int = 0,
+    ) -> dict[str, Any]:
+        conditions: list[str] = []
+        values: list[Any] = []
+        if q:
+            # Treat user input as literal text, including LIKE's wildcard characters.
+            escaped = q.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+            conditions.append("(goal LIKE ? ESCAPE '\\' OR project_path LIKE ? ESCAPE '\\' OR task_id LIKE ? ESCAPE '\\')")
+            values.extend([f"%{escaped}%"] * 3)
+        if status:
+            conditions.append("status = ?")
+            values.append(status)
+        where = " WHERE " + " AND ".join(conditions) if conditions else ""
+        with self._connect() as conn:
+            # Keep the count and page in the same snapshot while new tasks are created.
+            conn.execute("BEGIN")
+            total = conn.execute("SELECT COUNT(*) FROM agent_task" + where, values).fetchone()[0]
+            rows = conn.execute(
+                "SELECT task_id, goal, project_path, status, created_at, updated_at, "
+                "CASE WHEN LENGTH(TRIM(COALESCE(final_report, ''))) > 0 THEN 1 ELSE 0 END AS has_report "
+                "FROM agent_task" + where + " ORDER BY created_at DESC, rowid DESC LIMIT ? OFFSET ?",
+                [*values, limit, offset],
+            ).fetchall()
+        return {"tasks": [dict(row) for row in rows], "total": total, "limit": limit, "offset": offset}
 
     def get_task(self, task_id: str) -> dict[str, Any] | None:
         with self._connect() as conn:

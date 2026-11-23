@@ -21,7 +21,10 @@ export type TaskSummary = {
   created_at: string;
   updated_at: string;
   final_report?: string;
+  has_report?: boolean | number;
 };
+
+export type TaskPage = { tasks: TaskSummary[]; total: number; limit: number; offset: number };
 
 export type TaskArtifact = {
   artifact_type: string;

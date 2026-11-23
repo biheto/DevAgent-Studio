@@ -6,6 +6,7 @@ from langgraph.graph import END, StateGraph
 
 from app.graphs.project_analyzer_graph import project_analyzer_graph
 from app.harness.events import utc_now_iso
+from app.persistence.sqlite_store import task_store
 from app.skills.base import SkillContext
 from app.skills.registry import skill_registry
 from app.providers.llm_provider import llm_provider
@@ -83,6 +84,11 @@ def _append_event(state: StudioState, node: str, agent: str, content: str, statu
             "data": {},
         }
     )
+    event = events[-1]
+    if event.get("task_id"):
+        event["data"] = {"node_id": node, "node_type": "collaboration", "node_name": node.replace("_", " ").title()}
+        task_store.append_event(event)
+        event["persisted"] = True
     return events
 
 

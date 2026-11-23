@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
+from contextvars import ContextVar
 from datetime import datetime, timedelta, timezone
 from typing import Any
 from uuid import uuid4
@@ -8,6 +11,26 @@ from uuid import uuid4
 
 BEIJING_TZ = timezone(timedelta(hours=8))
 BEIJING_TIME_FORMAT = "%Y-%m-%d, %H:%M"
+
+_event_listener: ContextVar[Callable[[dict[str, Any]], None] | None] = ContextVar(
+    "task_event_listener", default=None
+)
+
+
+@contextmanager
+def listen_for_events(listener: Callable[[dict[str, Any]], None]) -> Iterator[None]:
+    """Scope notifications to one execution, including its copied worker contexts."""
+    token = _event_listener.set(listener)
+    try:
+        yield
+    finally:
+        _event_listener.reset(token)
+
+
+def publish_event(event: dict[str, Any]) -> None:
+    listener = _event_listener.get()
+    if listener is not None:
+        listener(dict(event))
 
 
 def utc_now_iso() -> str:

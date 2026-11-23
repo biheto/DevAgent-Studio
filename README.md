@@ -24,6 +24,7 @@ It is deliberately not a code-writing IDE. Its focus is making software delivery
 
 - **Multi-agent workflows, not isolated prompts**: Planner, Project Analyzer, Code Reviewer, RAG Processor, Supervisor, and Reporter are composed through LangGraph.
 - **Governed runtime**: Harness Runtime provides task context, event timelines, artifacts, review state, persistence, deterministic policy checks, and resume support.
+- **Live progress and usable history**: committed task events stream during execution; task history supports keyword search, status filters, and server-side pagination. Saved reports can be downloaded as Markdown.
 - **Visual workflows that execute**: a drag-and-drop canvas is compiled into executable LangGraph workflows instead of serving as a static diagram.
 - **Observable LLM operations**: prompt versions, model configuration, traces, token and cost data, fallback records, and A/B comparison are available from the UI.
 - **Extensible Skills with guardrails**: Skills are versioned, permission-scoped, testable, dependency-aware, and usable from both the console and a workflow.
@@ -57,6 +58,8 @@ The PR workflow accepts a GitHub PR URL and can post its governance report back 
 The screenshots below show the redesigned workbench: grouped navigation, a focused task form with expandable advanced settings, live execution events, and consistent controls across all ten pages. The DevAgent mark combines a D outline with branching workflow nodes, shared by the navigation and browser icon. Use **Ctrl / Command + K** to jump to a page; on smaller screens, navigation opens from the menu button. Motion respects the system's reduced-motion setting.
 
 以下截图展示重构后的工作台：灰白布局、分组导航、橙色重点，以及滑动选中和轻微按压反馈。DevAgent 标记以 D 字母轮廓和分支节点构成，导航与浏览器图标保持一致。任务配置、执行动态与结果各有清晰区域，高级参数按需展开。支持 **Ctrl / Command + K** 快速前往页面、移动端导航和减少动态效果。设计与交互说明见 [前端设计](docs/frontend-design.md)。
+
+执行动态现在随节点进度实时推送。历史任务支持按目标、项目路径或任务 ID 搜索，按状态筛选，每页 20 条；报告中心和历史报告预览均可导出 Markdown。关闭页面后，任务在服务进程内继续执行并保存；重新打开后可在历史任务中刷新查看。连接异常会明确提示，避免误以为任务已完成而重复提交。接口和验证说明见 [任务体验改进](docs/TASK_EXPERIENCE.md)。
 
 | Task workbench / 任务工作台 | Visual workflow / 工作流编排 |
 | --- | --- |

@@ -43,8 +43,9 @@ class HarnessRuntime:
             task_store.update_task(context.task_id, context.status, final_report)
 
             graph_events = result.get("events", [])
+            context_ids = {item["event_id"] for item in context.events.to_list()}
             for graph_event in graph_events:
-                if graph_event.get("task_id") and not graph_event.get("persisted"):
+                if graph_event.get("task_id") and not graph_event.get("persisted") and graph_event.get("event_id") not in context_ids:
                     task_store.append_event(graph_event)
 
             final_message = {"waiting_review": "等待人工审核", "failed": "任务执行失败，可恢复", "cancelled": "任务已取消", "partial_success": "任务部分成功"}.get(context.status, "任务执行完成")
