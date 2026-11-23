@@ -159,6 +159,11 @@ export async function getTaskDetail(taskId: string): Promise<TaskDetail> {
   return response.json();
 }
 
+export async function recoverTask(taskId: string): Promise<void> {
+  const response = await fetch(`${API_BASE}/api/v1/tasks/${encodeURIComponent(taskId)}/recover`, {method: 'POST'});
+  if (!response.ok) throw await apiError(response, '任务恢复失败');
+}
+
 export async function getTaskReport(taskId: string): Promise<string> {
   const response = await fetch(`${API_BASE}/api/v1/tasks/${taskId}/report`);
   if (!response.ok) throw new Error('报告读取失败');

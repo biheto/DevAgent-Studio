@@ -4,6 +4,7 @@ from collections.abc import Callable
 from typing import Any
 
 from app.harness.context import AgentExecutionContext
+from app.harness.durable import RunBusyError
 from app.persistence.sqlite_store import task_store
 
 
@@ -58,6 +59,9 @@ class HarnessRuntime:
                 "events": combined_events,
                 "result": public_result,
             }
+        except RunBusyError:
+            # Another execution owns this task; do not overwrite its status as failed.
+            raise
         except Exception as exc:
             context.status = "failed"
             task_store.update_task(context.task_id, "failed")

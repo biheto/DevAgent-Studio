@@ -1,61 +1,44 @@
 from __future__ import annotations
 
+from contextvars import ContextVar
 from typing import Any
 
-
-def run_workflow(workflow_name: str, input_text: str, nodes: list[dict[str, Any]]) -> dict[str, Any]:
-    if not nodes:
-        nodes = [
-            {"id": "plan", "type": "planner", "name": "任务规划", "config": {}},
-            {"id": "execute", "type": "executor", "name": "任务执行", "config": {}},
-            {"id": "report", "type": "reporter", "name": "结果汇总", "config": {}},
-        ]
-
-    events = []
-    current = input_text
-    for index, node in enumerate(nodes, 1):
-        node_type = node.get("type", "unknown")
-        name = node.get("name") or node.get("id") or f"node_{index}"
-        current = execute_workflow_node(node_type, name, current, node.get("config", {}))
-        events.append(
-            {
-                "step": index,
-                "node_id": node.get("id"),
-                "node_type": node_type,
-                "name": name,
-                "status": _status_for_node(node_type),
-                "output": current,
-            }
-        )
-
-    return {"workflow_name": workflow_name, "events": events, "output": current}
+_inline_workflow_active: ContextVar[bool] = ContextVar("inline_workflow_active", default=False)
 
 
-def execute_workflow_node(node_type: str, name: str, current: str, config: dict[str, Any]) -> str:
-    goal = str(config.get("goal") or current or "未提供目标")
-    if node_type == "planner":
-        return f"已规划任务：{goal}"
-    if node_type == "executor":
-        return f"已执行：{current}"
-    if node_type == "agent":
-        agent_type = config.get("agent_type") or name
-        return f"{agent_type} 已处理：{current}"
-    if node_type == "rag":
-        collection = config.get("collection") or "default"
-        return f"已检索知识库 {collection}：{current}"
-    if node_type == "mcp_tool":
-        tool_name = config.get("tool_name") or "filesystem"
-        return f"已调用 MCP 工具 {tool_name}：{current}"
-    if node_type == "supervisor":
-        return f"质量检查通过：{current}"
-    if node_type == "reporter":
-        return f"最终报告：{current}"
-    if node_type == "human_review":
-        return f"等待人工审核：{current}"
-    return f"{name} 处理完成：{current}"
+def run_workflow(
+    workflow_name: str, input_text: str, nodes: list[dict[str, Any]],
+    *, edges: list[dict[str, Any]] | None = None, project_path: str | None = None,
+    max_files: int = 100,
+) -> dict[str, Any]:
+    """Execute inline skills through the real compiler, with bounded scope.
 
-
-def _status_for_node(node_type: str) -> str:
-    if node_type == "human_review":
-        return "waiting_review"
-    return "completed"
+    Pausable/nested workflows belong to the persisted task API; an inline skill must
+    never claim completion while a child graph is awaiting a decision.
+    """
+    if _inline_workflow_active.get():
+        raise ValueError("Recursive workflow.run calls are not supported; use a top-level task workflow.")
+    nodes = nodes or [
+        {"id": "plan", "type": "planner", "name": "任务规划", "config": {}},
+        {"id": "report", "type": "reporter", "name": "结果汇总", "config": {}},
+    ]
+    if len(nodes) > 20:
+        raise ValueError("Inline workflow.run supports at most 20 nodes.")
+    if not 1 <= max_files <= 5000:
+        raise ValueError("max_files must be between 1 and 5000.")
+    if any(node.get("type") == "human_review" or (node.get("config") or {}).get("confirm_before_run") for node in nodes):
+        raise ValueError("Human review requires a persisted task; run this workflow from the task workbench.")
+    # Lazy import avoids the built-in skill registry/compiler import cycle.
+    from app.graphs.workflow_compiler import run_compiled_workflow
+    token = _inline_workflow_active.set(True)
+    try:
+        result = run_compiled_workflow(workflow_name, input_text, nodes, edges, {
+            "project_path": project_path, "max_files": max_files, "require_human_review": False,
+        })
+        latest = {event.get("node"): event.get("status") for event in result["events"]}
+        if any(status in {"failed", "cancelled", "waiting_review"} for status in latest.values()):
+            messages = [event.get("content", "") for event in result["events"] if event.get("status") == "failed"]
+            raise RuntimeError("Inline workflow did not complete: " + "; ".join(messages))
+        return {**result, "execution_status": "completed"}
+    finally:
+        _inline_workflow_active.reset(token)

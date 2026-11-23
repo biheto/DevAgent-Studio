@@ -21,13 +21,13 @@ from app.business_scenarios import SCENARIOS, run_business_scenario
 from app.graphs.project_analyzer_graph import project_analyzer_graph
 from app.graphs.studio_graphs import (
     code_review_graph,
-    collaboration_graph,
     learning_coach_graph,
     rag_process_graph,
 )
 from app.graphs.collaboration_runner import run_collaboration_task
+from app.graphs.task_execution import resume_task_run
+from app.harness.durable import RunBusyError
 from app.graphs.workflow_compiler import (
-    resume_task_workflow,
     run_compiled_workflow,
     run_task_workflow,
     validate_workflow_definition,
@@ -887,8 +887,8 @@ def update_workflow(workflow_id: str, request: WorkflowSaveRequest) -> WorkflowS
 
 @router.post("/agents/collaborate", response_model=CollaborationResponse, tags=["Multi-Agent Collaboration"])
 def run_collaboration(request: CollaborationRequest) -> CollaborationResponse:
-    result = collaboration_graph.invoke(request.model_dump())["result"]
-    return CollaborationResponse(**result)
+    response = run_collaboration_task_api(TaskRunRequest(**request.model_dump(), execution_mode="collaboration"))
+    return CollaborationResponse(**response.result, task_id=response.task_id, status=response.status)
 
 
 @router.post("/tasks/run", response_model=TaskRunResponse, tags=["Task Runtime"])
@@ -1181,6 +1181,9 @@ def chat_learning_coach(request: LearningChatRequest) -> LearningChatResponse:
 
 @router.post("/tasks/{task_id}/approve", response_model=HumanReviewResponse, tags=["Task Runtime"])
 def approve_task(task_id: str, request: HumanReviewRequest) -> HumanReviewResponse:
+    existing = _guard_collaboration_review(task_id, "approved", request.comment)
+    if existing:
+        return existing
     checkpoint = _latest_resume_checkpoint(task_id)
     if checkpoint:
         return _resume_after_human_review(task_id, checkpoint, "approved", request.comment)
@@ -1192,6 +1195,9 @@ def approve_task(task_id: str, request: HumanReviewRequest) -> HumanReviewRespon
 
 @router.post("/tasks/{task_id}/reject", response_model=HumanReviewResponse, tags=["Task Runtime"])
 def reject_task(task_id: str, request: HumanReviewRequest) -> HumanReviewResponse:
+    existing = _guard_collaboration_review(task_id, "rejected", request.comment)
+    if existing:
+        return existing
     checkpoint = _latest_resume_checkpoint(task_id)
     if checkpoint and checkpoint.get("durable"):
         return _resume_after_human_review(task_id, checkpoint, "rejected", request.comment)
@@ -1202,10 +1208,32 @@ def reject_task(task_id: str, request: HumanReviewRequest) -> HumanReviewRespons
 
 @router.post("/tasks/{task_id}/revise", response_model=HumanReviewResponse, tags=["Task Runtime"])
 def revise_task(task_id: str, request: HumanReviewRequest) -> HumanReviewResponse:
+    _guard_collaboration_review(task_id, "revised", request.comment)
     checkpoint = _latest_resume_checkpoint(task_id)
     if checkpoint and _retry_pre_run_confirmation(task_id, checkpoint, "revised", request.comment):
         return HumanReviewResponse(task_id=task_id, status="waiting_review", action="revised", comment=request.comment)
     return _record_human_review(task_id, "revised", "waiting_review", request.comment)
+
+
+def _guard_collaboration_review(task_id: str, action: str, comment: str | None):
+    import time
+    from app.harness.durable import load_run
+    try:
+        stored = load_run(task_id)
+    except KeyError:
+        return None
+    if stored["definition"].get("graph_type") != "collaboration":
+        return None
+    if (stored["lease_until"] or 0) > time.time():
+        raise HTTPException(409, "Collaboration is already executing.")
+    status = stored["status"]
+    if (status, action) in {("completed", "approved"), ("cancelled", "rejected")}:
+        return HumanReviewResponse(task_id=task_id, status=status, action=action, comment=comment)
+    if status != "waiting_review":
+        raise HTTPException(409, "This collaboration has no pending review. Recover a failed task before reviewing it.")
+    if not _latest_resume_checkpoint(task_id):
+        raise HTTPException(409, "The pending review checkpoint is missing.")
+    return None
 
 
 def _resolve_task_workflow(request: TaskRunRequest) -> dict[str, object]:
@@ -1501,7 +1529,7 @@ def _resume_after_human_review(
         "type": "human_review",
         "node": str(checkpoint.get("paused_node_id") or "human_review"),
         "agent": "human_reviewer",
-        "status": "approved",
+        "status": action,
         "content": _review_content(action, comment),
         "data": {"action": action, "comment": comment, "resume": True},
     }
@@ -1515,13 +1543,15 @@ def _resume_after_human_review(
             "node": "workflow_resume",
             "agent": "harness_runtime",
             "status": "running",
-            "content": "Workflow resume started from approved checkpoint.",
+            "content": f"Workflow resume started with review decision: {action}.",
             "data": {"paused_node_id": checkpoint.get("paused_node_id")},
         }
     )
 
     try:
-        result = resume_task_workflow(checkpoint, action, comment)
+        result = resume_task_run(checkpoint, action, comment)
+    except RunBusyError as exc:
+        raise HTTPException(409, str(exc)) from exc
     except Exception as exc:
         task_store.update_task(task_id, "failed")
         task_store.append_event(
@@ -1803,7 +1833,7 @@ def _fallback_learning_next_questions(request: LearningChatRequest, task: dict[s
                 "如果一个节点失败，时间线应该展示哪些信息才方便用户判断？",
             ]
         return [
-            "固定 collaboration_graph 和可视化 Workflow 图有什么区别？",
+            "按计划路由的协作流程和可视化 Workflow 图有什么区别？",
             "节点之间是直接互相调用，还是通过 state 传递信息？",
             "Planner 模式生成的 Workflow 应该如何被用户确认？",
         ]

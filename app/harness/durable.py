@@ -141,7 +141,8 @@ def execute_graph(build, definition: dict, initial: dict, action: str | None = N
                 result["__interrupt__"] = pending_interrupts
             else:
                 # Approve one interrupt at a time, including fan-out branches.
-                result = invoke(Command(resume={pending_interrupts[0].id: action}))
+                value = {"action": action, "comment": initial.get("review_comment", "")} if definition.get("graph_type") == "collaboration" else action
+                result = invoke(Command(resume={pending_interrupts[0].id: value}))
         else:
             try:
                 if snapshot.values and not snapshot.next:

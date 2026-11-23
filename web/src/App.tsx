@@ -67,6 +67,7 @@ import {
   queryKnowledge,
   rejectMemory,
   reviewTask,
+  recoverTask,
   runBenchmark,
   runBusinessScenarioStream,
   runCollaborationTaskStream,
@@ -250,6 +251,9 @@ export function App() {
   const [resumeSnapshots, setResumeSnapshots] = useState<ResumeSnapshot[]>([]);
 
   const [finalReport, setFinalReport] = useState('');
+  const [draftReport, setDraftReport] = useState('');
+  const [canRecover, setCanRecover] = useState(false);
+  const [recoveryError, setRecoveryError] = useState('');
   const [mermaid, setMermaid] = useState('');
   const [suggestions, setSuggestions] = useState<string[]>([]);
   const [suggestionRecords, setSuggestionRecords] = useState<SuggestionRecord[]>([]);
@@ -678,6 +682,8 @@ export function App() {
       const result = payload as TaskResultPayload;
       setSelectedTaskId(result.task_id);
       setFinalReport(result.final_report ?? '');
+      setDraftReport(result.draft_report ?? '');
+      setCanRecover(result.status === 'failed' && Boolean(result.resume_checkpoint?.durable));
       setMermaid(result.mermaid ?? '');
       setSuggestions(result.suggestions ?? []);
       setSuggestionRecords(result.suggestion_records ?? []);
@@ -702,6 +708,9 @@ export function App() {
   }
 
   function resetRunOutput() {
+    setCanRecover(false);
+    setRecoveryError('');
+    setDraftReport('');
     taskLoadVersion.current += 1;
     setSelectedTaskId('');
     setRunning(true);
@@ -843,6 +852,9 @@ export function App() {
   }
 
   async function restoreTaskContext(taskId: string) {
+    setCanRecover(false);
+    setRecoveryError('');
+    setDraftReport('');
     const version = ++taskLoadVersion.current;
     setFinalReport('');
     setEvents([]);
@@ -861,6 +873,8 @@ export function App() {
     const resumeRecords = extractResumeSnapshots(taskDetail.artifacts);
     setEvents(taskEvents);
     setFinalReport(taskResult.final_report ?? taskDetail.task.final_report ?? '');
+    setDraftReport(taskResult.draft_report ?? '');
+    setCanRecover(taskDetail.task.status === 'failed' && Boolean(taskResult.resume_checkpoint?.durable));
     setMermaid(taskResult.mermaid ?? '');
     setSuggestions(taskResult.suggestions ?? []);
     setSuggestionRecords(taskResult.suggestion_records ?? []);
@@ -872,8 +886,24 @@ export function App() {
     setResumeSnapshots(resumeRecords);
   }
 
+  async function handleRecover() {
+    if (!latestTaskId || running) return;
+    setRunning(true);
+    setRecoveryError('');
+    try {
+      await recoverTask(latestTaskId);
+      await refreshTasks();
+      await loadTaskContext(latestTaskId);
+    } catch (exc) {
+      setRecoveryError(exc instanceof Error ? exc.message : String(exc));
+    } finally {
+      setRunning(false);
+    }
+  }
+
   async function handleReview(action: 'approve' | 'reject' | 'revise') {
-    if (!latestTaskId) return;
+    if (!latestTaskId || running) return;
+    setRunning(true);
     try {
       await reviewTask(latestTaskId, action, reviewComment);
       await refreshTasks();
@@ -883,6 +913,8 @@ export function App() {
       setReviewComment('');
     } catch (exc) {
       setError(exc instanceof Error ? exc.message : String(exc));
+    } finally {
+      setRunning(false);
     }
   }
 
@@ -1393,10 +1425,12 @@ export function App() {
             </div>
 
             <div className="panel state-panel">
-              <PanelTitle icon={<Activity size={17} />} title="任务详情" />
+              <PanelTitle icon={<Activity size={17} />} title="任务详情" action={canRecover ? <button className="secondary" disabled={running} onClick={handleRecover}>{running ? '正在恢复…' : '从检查点继续'}</button> : undefined} />
+              {recoveryError && <p className="error-text" role="alert">{recoveryError}</p>}
               <StateSummary latestTaskId={latestTaskId} latestStatus={latestStatus} workflowName={workflowName} />
               {taskNeedsReview && latestTaskId ? (
                 <ReviewBox
+                  busy={running}
                   comment={reviewComment}
                   onCommentChange={setReviewComment}
                   onReview={handleReview}
@@ -1467,7 +1501,7 @@ export function App() {
             <div className="panel report-card markdown-card report-tab-card">
               <PanelTitle icon={<FileText size={17} />} title="报告中心" action={<ReportDownload taskId={latestTaskId} available={Boolean(finalReport) && !running} />} />
               <ReportTabs active={reportTab} onChange={setReportTab} />
-              {reportTab === 'final' ? <MarkdownView text={finalReport || '运行任务后，这里会显示格式化后的最终报告。'} /> : null}
+              {reportTab === 'final' ? <MarkdownView text={finalReport || draftReport || '运行任务后，这里会显示格式化后的最终报告。'} /> : null}
               {reportTab === 'mentor' ? <MarkdownView text={extractMentorView(finalReport)} /> : null}
               {reportTab === 'mermaid' ? <MermaidDiagram source={mermaid || buildLocalMermaid(nodes, edges)} /> : null}
               {reportTab === 'governance' ? (
@@ -1634,12 +1668,13 @@ export function App() {
               <TaskHistory selectedTaskId={selectedTaskId} onOpen={openTask} disabled={running} />
             </div>
             <div className="panel timeline-large">
-              <PanelTitle icon={<Activity size={17} />} title="任务事件回放" />
+              <PanelTitle icon={<Activity size={17} />} title="任务事件回放" action={canRecover ? <button className="secondary" disabled={running} onClick={handleRecover}>{running ? '正在恢复…' : '从检查点继续'}</button> : undefined} />
+              {recoveryError && <p className="error-text" role="alert">{recoveryError}</p>}
               <Timeline events={events} />
             </div>
             <div className="panel report-preview-panel">
               <PanelTitle icon={<FileText size={17} />} title="报告预览" action={<ReportDownload taskId={latestTaskId} available={Boolean(finalReport) && !running} />} />
-              <MarkdownView text={finalReport || '选择历史任务后查看报告。'} />
+              <MarkdownView text={finalReport || draftReport || '选择历史任务后查看报告。'} />
             </div>
           </section>
         ) : null}
@@ -2042,11 +2077,13 @@ function FocusPicker({
 }
 
 function ReviewBox({
+  busy,
   comment,
   onCommentChange,
   onReview,
   onReviewAction,
 }: {
+  busy: boolean;
   comment: string;
   onCommentChange: (value: string) => void;
   onReview: (action: 'approve' | 'reject' | 'revise') => void;
@@ -2056,18 +2093,18 @@ function ReviewBox({
     <div className="review-box">
       <PanelTitle icon={<Check size={16} />} title="人工审核" />
       <textarea value={comment} onChange={(event) => onCommentChange(event.target.value)} placeholder="填写审核意见" />
-      <FieldHelp>通过会继续暂停的 Workflow；修改/拒绝会保留你的意见到任务事件里。</FieldHelp>
+      <FieldHelp>通过后从暂停处继续；修改会保留意见并继续等待；拒绝会停止后续执行。</FieldHelp>
       <FieldHelp>如果暂停节点开启了“执行前确认”并设置 retry_count，拒绝/修改会先消耗重试次数并重新等待确认；次数用完后才结束为拒绝。</FieldHelp>
       <div className="review-actions">
-        <button onClick={() => onReview('approve')}><Check size={15} />通过</button>
-        <button onClick={() => onReview('revise')}><RefreshCw size={15} />修改</button>
-        <button onClick={() => onReview('reject')}><X size={15} />拒绝</button>
+        <button disabled={busy} onClick={() => onReview('approve')}><Check size={15} />{busy ? '正在处理…' : '通过'}</button>
+        <button disabled={busy} onClick={() => onReview('revise')}><RefreshCw size={15} />修改</button>
+        <button disabled={busy} onClick={() => onReview('reject')}><X size={15} />拒绝</button>
       </div>
       <div className="review-extra-actions">
-        <button onClick={() => onReviewAction('rerun_analysis')}>深入分析</button>
-        <button onClick={() => onReviewAction('focus_module', { module: comment || 'selected module' })}>聚焦模块</button>
-        <button onClick={() => onReviewAction('save_knowledge')}>保存知识</button>
-        <button onClick={() => onReviewAction('learning_task')}>学习任务</button>
+        <button disabled={busy} onClick={() => onReviewAction('rerun_analysis')}>深入分析</button>
+        <button disabled={busy} onClick={() => onReviewAction('focus_module', { module: comment || 'selected module' })}>聚焦模块</button>
+        <button disabled={busy} onClick={() => onReviewAction('save_knowledge')}>保存知识</button>
+        <button disabled={busy} onClick={() => onReviewAction('learning_task')}>学习任务</button>
       </div>
     </div>
   );

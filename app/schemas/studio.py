@@ -382,6 +382,11 @@ class CollaborationRequest(BaseModel):
 
 
 class CollaborationResponse(BaseModel):
+    task_id: str | None = None
+    status: str = "completed"
+    execution_plan: dict[str, Any] = Field(default_factory=dict)
+    draft_report: str = ""
+    quality_gate: dict[str, Any] = Field(default_factory=dict)
     goal: str
     plan: list[str]
     worker_results: list[dict[str, str]]

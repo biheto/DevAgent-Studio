@@ -23,6 +23,7 @@ It is deliberately not a code-writing IDE. Its focus is making software delivery
 ## Why DevAgent Studio
 
 - **Multi-agent workflows, not isolated prompts**: Planner, Project Analyzer, Code Reviewer, RAG Processor, Supervisor, and Reporter are composed through LangGraph.
+- **Executable collaboration plans**: validated plans select and order real workers. Deterministic risk checks pause for durable human review; approval resumes without repeating completed workers, rejection stops before reporting, and failed runs can recover from checkpoints. Reports include file/line evidence and explicit scope limits. See [Agent execution and remaining boundaries](docs/AGENT_EXECUTION.md).
 - **Governed runtime**: Harness Runtime provides task context, event timelines, artifacts, review state, persistence, deterministic policy checks, and resume support.
 - **Live progress and usable history**: committed task events stream during execution; task history supports keyword search, status filters, and server-side pagination. Saved reports can be downloaded as Markdown.
 - **Visual workflows that execute**: a drag-and-drop canvas is compiled into executable LangGraph workflows instead of serving as a static diagram.
@@ -83,6 +84,8 @@ The screenshots below show the redesigned workbench: grouped navigation, a focus
 
 ## Architecture
 
+Agent 执行层已补齐可执行计划、真实人工暂停、协作失败恢复及文件/行号证据。`workflow.run` 也已接入真实节点执行。待审核摘要与正式报告分开，未执行的检查明确标注；修改审核意见暂不触发自动重规划。实现细节、验证结果和仍未实现的能力见 [Agent 执行说明](docs/AGENT_EXECUTION.md)。
+
 ```text
 User / React workbench
         |
@@ -126,7 +129,7 @@ Task request
 | RAG knowledge | Governed project knowledge base with incremental indexing, document versions, document ACL, hybrid BM25/vector retrieval, optional LLM rerank, SQLite default storage, and pgvector extension. |
 | Long-term memory | LLM/rule candidate extraction, explicit confirmation, conflict replacement, quality scoring, retention review, and scoped access boundaries. |
 | Learning coach | Project-oriented learning plans and interactive follow-up questions. |
-| Collaboration | Planner, analyzer, reviewer, RAG, supervisor, and reporter run as a traceable collaboration graph. |
+| Collaboration | Validated plans route actual workers; deterministic risk gates, durable approval/rejection, checkpoint recovery, and evidence-backed reports. Collaboration RAG creates chunks without automatic ingestion. |
 | Workflow | Drag, connect, configure, validate, save, and execute workflow JSON compiled to LangGraph. |
 | Human review | Node-level approval/rejection, checkpoint/resume, retry, and recovery visualization. |
 | LLM governance | Per-agent model configuration, call trace, prompt versions, token/cost data, fallback display, and A/B tests. |

@@ -5,7 +5,7 @@ import time
 from app.harness.context import AgentExecutionContext
 from app.harness.durable import load_run, RunBusyError
 from app.harness.runtime import harness_runtime
-from app.graphs.workflow_compiler import run_task_workflow
+from app.graphs.task_execution import runner_for
 from app.persistence.sqlite_store import task_store
 from app.harness.durable import journal
 from app.harness.reconciliation import reconcile
@@ -52,7 +52,7 @@ def recover_task(task_id: str):
         raise HTTPException(409, "Workflow is already executing.")
     context = AgentExecutionContext(goal=stored["input"].get("goal", ""), task_id=task_id)
     try:
-        return harness_runtime.run_graph(context, run_task_workflow, {**stored["input"], **stored["definition"], "durable_action": "retry"})
+        return harness_runtime.run_graph(context, runner_for(stored), {**stored["input"], **stored["definition"], "durable_action": "retry"})
     except RunBusyError as exc:
         raise HTTPException(409, str(exc)) from exc
 

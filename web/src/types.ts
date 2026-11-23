@@ -81,6 +81,8 @@ export type TaskResultPayload = {
   task_id: string;
   status: string;
   final_report?: string;
+  draft_report?: string;
+  resume_checkpoint?: { durable?: boolean; run_id?: string };
   mermaid?: string;
   suggestions?: string[];
   suggestion_records?: SuggestionRecord[];

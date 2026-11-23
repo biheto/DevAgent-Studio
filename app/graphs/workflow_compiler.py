@@ -796,8 +796,7 @@ def _run_agent_node(
         )["result"]
         text = result.get("report_markdown") or "Learning plan generated."
     else:
-        result = {"message": f"Unknown Agent: {agent_type}", "goal": goal}
-        text = result["message"]
+        raise ValueError(f"Unsupported Agent: {agent_type}")
     focus = config.get("focus")
     output_format = config.get("output_format")
     if isinstance(result, dict) and (focus or output_format):

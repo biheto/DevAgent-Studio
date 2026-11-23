@@ -262,11 +262,11 @@ class WorkflowRunSkill(BuiltinSkill):
         super().__init__(
             code="workflow.run",
             name="Workflow Runner",
-            description="Run a compact workflow preview and return node events and output.",
+            description="Execute up to 20 workflow nodes with the real graph compiler. Human review requires the persisted task API.",
             category="workflow",
             execution_type="workflow",
             permissions=["workflow.run"],
-            input_schema={"workflow_name": "string", "input_text": "string", "nodes": "array"},
+            input_schema={"workflow_name": "string", "input_text": "string", "nodes": "array", "edges": "array", "project_path": "string", "max_files": "number"},
             output_schema={"events": "array", "output": "string"},
             default_input={"workflow_name": "skill_preview", "input_text": "Run skill workflow", "nodes": []},
         )
@@ -276,6 +276,9 @@ class WorkflowRunSkill(BuiltinSkill):
             str(input_data.get("workflow_name") or "skill_preview"),
             str(input_data.get("input_text") or ""),
             list(input_data.get("nodes") or []),
+            edges=list(input_data.get("edges") or []),
+            project_path=input_data.get("project_path"),
+            max_files=int(input_data.get("max_files") or 100),
         )
 
 

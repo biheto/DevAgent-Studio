@@ -1,8 +1,13 @@
 from __future__ import annotations
 
 from typing import Any, TypedDict
+from uuid import uuid4
+import json
 
 from langgraph.graph import END, StateGraph
+from langgraph.types import interrupt
+
+from app.graphs.collaboration_policy import AGENTS, create_plan, quality_gate, evidence_records, evidence_markdown
 
 from app.graphs.project_analyzer_graph import project_analyzer_graph
 from app.harness.events import utc_now_iso
@@ -26,6 +31,15 @@ class StudioState(TypedDict, total=False):
     task_id: str
     events: list[dict[str, Any]]
     plan: list[str]
+    execution_plan: dict[str, Any]
+    planning: dict[str, Any]
+    completed_agents: list[str]
+    quality_gate: dict[str, Any]
+    review_decision: str
+    review_comment: str
+    report_generation: dict[str, Any]
+    business_scenario: str
+    durable_run_id: str
     project_analysis: dict[str, Any]
     code_review: dict[str, Any]
     rag_result: dict[str, Any]
@@ -74,7 +88,7 @@ def _append_event(state: StudioState, node: str, agent: str, content: str, statu
     events.append(
         {
             "task_id": state.get("task_id"),
-            "event_id": f"evt_{state.get('task_id', 'adhoc')}_{node}_{len(events) + 1}",
+            "event_id": f"evt_{uuid4().hex}",
             "node": node,
             "agent": agent,
             "type": "agent_step",
@@ -93,97 +107,59 @@ def _append_event(state: StudioState, node: str, agent: str, content: str, statu
 
 
 def _planner_node(state: StudioState) -> StudioState:
-    fallback_plan = [
-        "解析用户目标并确定需要执行的 Agent",
-        "调用项目分析子图生成项目画像",
-        "调用代码审查子图识别代码风险",
-        "调用 RAG 知识加工子图沉淀资料",
-        "由 Supervisor 汇总质量意见",
-        "根据策略决定是否进入人工审核",
-        "生成最终协作报告",
-    ]
-    plan = llm_provider.plan_steps(
-        state["goal"],
-        {"project_path": state.get("project_path"), "max_files": state.get("max_files")},
-        fallback_plan,
-    )
+    plan, metadata = create_plan(state["goal"], state.get("project_path"), state.get("business_scenario", ""))
     return {
-        **state,
-        "plan": plan,
-        "events": _append_event(state, "planner", "planner", "任务规划完成"),
+        **state, "execution_plan": plan, "planning": metadata, "completed_agents": [],
+        "plan": [f"{step['agent']}: {step['objective']}" for step in plan["steps"]],
+        "events": _append_event(state, "planner", "planner", "可执行计划已校验：" + ", ".join(step["agent"] for step in plan["steps"])),
     }
+
+
+def _run_worker(state: StudioState, agent: str, result_key: str, execute) -> StudioState:
+    state = {**state, "events": _append_event(state, agent, agent, "开始执行", "running")}
+    try:
+        result = execute()
+    except Exception as exc:
+        _append_event(state, agent, agent, str(exc), "failed")
+        raise
+    return {**state, result_key: result, "completed_agents": [*state.get("completed_agents", []), agent],
+            "events": _append_event(state, agent, agent, "执行完成，结果已交给 Supervisor")}
 
 
 def _project_analyzer_subgraph_node(state: StudioState) -> StudioState:
-    result = project_analyzer_graph.invoke(
-        {
-            "project_path": state["project_path"],
-            "max_files": state.get("max_files", 500),
-        }
-    )
-    return {
-        **state,
-        "project_analysis": result,
-        "events": _append_event(state, "project_analyzer", "project_analyzer", "项目分析子图执行完成"),
-    }
+    return _run_worker(state, "project_analyzer", "project_analysis", lambda: project_analyzer_graph.invoke({
+        "project_path": state["project_path"], "max_files": state.get("max_files", 500),
+    }))
 
 
 def _code_reviewer_subgraph_node(state: StudioState) -> StudioState:
-    result = code_review_graph.invoke(
-        {
-            "project_path": state["project_path"],
-            "max_files": state.get("max_files", 500),
-        }
-    )["result"]
-    return {
-        **state,
-        "code_review": result,
-        "events": _append_event(state, "code_reviewer", "code_reviewer", "代码审查子图执行完成"),
-    }
+    return _run_worker(state, "code_reviewer", "code_review", lambda: code_review_graph.invoke({
+        "project_path": state["project_path"], "max_files": state.get("max_files", 500),
+    })["result"])
 
 
 def _rag_processor_subgraph_node(state: StudioState) -> StudioState:
-    result = rag_process_graph.invoke(
-        {
-            "project_path": state["project_path"],
-            "max_files": state.get("max_files", 300),
-        }
-    )["result"]
-    return {
-        **state,
-        "rag_result": result,
-        "events": _append_event(state, "rag_processor", "rag_processor", "RAG 知识加工子图执行完成"),
-    }
+    return _run_worker(state, "rag_processor", "rag_result", lambda: rag_process_graph.invoke({
+        "project_path": state["project_path"], "max_files": state.get("max_files", 300),
+    })["result"])
+
+
+def _next_worker(state: StudioState) -> str:
+    completed = state.get("completed_agents", [])
+    return next((step["agent"] for step in state["execution_plan"]["steps"] if step["agent"] not in completed), "supervisor")
 
 
 def _supervisor_node(state: StudioState) -> StudioState:
-    fallback_notes = []
-    code_review = state.get("code_review", {})
-    project_analysis = state.get("project_analysis", {})
-    rag_result = state.get("rag_result", {})
-
-    if code_review.get("score", 100) < 70:
-        fallback_notes.append("代码审查评分低于 70，需要优先处理高风险问题。")
-    else:
-        fallback_notes.append("代码审查未发现阻断级问题，可进入报告阶段。")
-
-    if not project_analysis.get("tech_stack"):
-        fallback_notes.append("项目技术栈识别不足，建议补充 README 或构建配置。")
-    else:
-        fallback_notes.append("项目画像信息充足，可支撑后续报告。")
-
-    if len(rag_result.get("chunks", [])) == 0:
-        fallback_notes.append("RAG 未生成有效切片，知识沉淀效果有限。")
-    else:
-        fallback_notes.append("RAG 已生成知识切片，可进入向量库增强阶段。")
-
-    notes = _llm_supervisor_notes(project_analysis, code_review, rag_result, fallback_notes)
-
-    return {
-        **state,
-        "supervisor_notes": notes,
-        "events": _append_event(state, "supervisor", "supervisor", "质量监督完成"),
-    }
+    gate = quality_gate(state)
+    fallback_notes = [*gate["reasons"], *gate["coverage_gaps"]]
+    fallback_notes.append("已完成的 Agent：" + ", ".join(state.get("completed_agents", [])))
+    if "rag_processor" in state.get("completed_agents", []):
+        fallback_notes.append("知识切片已生成，尚未自动写入知识库。")
+    notes = _llm_supervisor_notes(state.get("project_analysis", {}), state.get("code_review", {}), state.get("rag_result", {}), fallback_notes)
+    # Model commentary may add context, but cannot remove deterministic review reasons.
+    notes = list(dict.fromkeys([*fallback_notes, *notes]))
+    return {**state, "quality_gate": gate, "supervisor_notes": notes,
+            "events": _append_event(state, "supervisor", "supervisor", f"质量检查完成：{gate['risk_level']}；人工审核：{gate['review_required']}")}
 
 
 def _llm_supervisor_notes(
@@ -210,60 +186,72 @@ def _llm_supervisor_notes(
 
 
 def _should_review(state: StudioState) -> str:
-    if state.get("require_human_review", True):
-        return "review"
-    return "report"
+    return "review" if state["quality_gate"]["review_required"] else "report"
+
+
+def _prepare_review(state: StudioState) -> StudioState:
+    packet = {"status": "pending", "node_id": "human_review",
+              "question": "请核对执行范围与风险证据，是否允许生成正式协作报告？",
+              "options": ["approve", "reject", "revise"], "summary": state.get("supervisor_notes", []),
+              "risk_level": state["quality_gate"]["risk_level"], "evidence": evidence_records(state)}
+    return {**state, "human_review_packet": packet,
+            "events": _append_event(state, "human_review", "human_reviewer", "已暂停，等待人工审核", "waiting_review")}
 
 
 def _human_review_node(state: StudioState) -> StudioState:
-    packet = {
-        "status": "pending",
-        "question": "是否允许基于本次多 Agent 结果继续生成正式报告？",
-        "options": ["approve", "reject", "revise"],
-        "summary": state.get("supervisor_notes", []),
+    response = interrupt(state["human_review_packet"])
+    action = response.get("action") if isinstance(response, dict) else response
+    comment = str(response.get("comment") or "") if isinstance(response, dict) else ""
+    approved = action in {"approve", "approved"}
+    decision = "approved" if approved else "rejected"
+    return {**state, "review_decision": decision, "review_comment": comment,
+            "human_review_packet": {**state["human_review_packet"], "status": decision},
+            "events": _append_event(state, "human_review", "human_reviewer",
+                                    "审核通过，继续生成报告" if approved else "审核已拒绝，任务停止",
+                                    "completed" if approved else "cancelled")}
+
+
+def collaboration_result(state: StudioState) -> dict[str, Any]:
+    summaries = {
+        "project_analyzer": _compact_project_analysis(state.get("project_analysis", {})),
+        "code_reviewer": _compact_code_review(state.get("code_review", {})),
+        "rag_processor": _compact_rag_result(state.get("rag_result", {})),
     }
+    gate = state.get("quality_gate") or quality_gate(state)
     return {
-        **state,
-        "human_review_packet": packet,
-        "events": _append_event(state, "human_review", "human_reviewer", "已生成人工审核包", "waiting_review"),
+        "goal": state.get("goal", ""), "plan": state.get("plan", []),
+        "execution_plan": state.get("execution_plan", {}), "planning": state.get("planning", {}),
+        "completed_agents": state.get("completed_agents", []),
+        "worker_results": [{"agent": agent, "result": json.dumps(summaries[agent], ensure_ascii=False)}
+                           for agent in state.get("completed_agents", [])],
+        "supervisor_notes": state.get("supervisor_notes", []), "quality_gate": gate,
+        "human_review_required": gate["review_required"],
+        "human_review_packet": state.get("human_review_packet"), "review_decision": state.get("review_decision"),
+        "review_comment": state.get("review_comment", ""),
+        "final_report": state.get("final_report", ""), "report_generation": state.get("report_generation", {}),
+        "evidence": evidence_records(state),
+        "project_analysis": summaries["project_analyzer"], "code_review": summaries["code_reviewer"],
+        "rag_result": summaries["rag_processor"], "events": state.get("events", []),
     }
 
 
 def _reporter_node(state: StudioState) -> StudioState:
-    fallback_report = _build_collaboration_report(state)
-    report = llm_provider.write_report(
-        state["goal"],
-        {
-            "project_analysis": _compact_project_analysis(state.get("project_analysis", {})),
-            "code_review": _compact_code_review(state.get("code_review", {})),
-            "rag_result": _compact_rag_result(state.get("rag_result", {})),
-            "supervisor_notes": state.get("supervisor_notes", []),
-        },
-        fallback_report,
+    facts = collaboration_result(state)
+    response = llm_provider.generate_with_status(
+        "你是项目治理报告生成器。只能依据提供的执行范围和证据输出中文 Markdown。未执行的检查必须写未执行，"
+        "不得把代码问题缺失说成安全保证，不得声称知识切片已经入库。引用问题时保留 evidence_id、文件和行号。",
+        json.dumps({key: facts[key] for key in ("goal", "worker_results", "supervisor_notes", "quality_gate", "evidence", "review_comment")}, ensure_ascii=False),
+        _build_collaboration_report(state), agent="reporter", prompt_version="collaboration_report.v1",
     )
-    result = {
-        "goal": state["goal"],
-        "plan": state.get("plan", []),
-        "worker_results": [
-            {"agent": "project_analyzer", "result": "项目分析子图已完成"},
-            {"agent": "code_reviewer", "result": "代码审查子图已完成"},
-            {"agent": "rag_processor", "result": "RAG 知识加工子图已完成"},
-        ],
-        "supervisor_notes": state.get("supervisor_notes", []),
-        "human_review_required": state.get("require_human_review", True),
-        "human_review_packet": state.get("human_review_packet"),
-        "final_report": report,
-        "project_analysis": _compact_project_analysis(state.get("project_analysis", {})),
-        "code_review": _compact_code_review(state.get("code_review", {})),
-        "rag_result": _compact_rag_result(state.get("rag_result", {})),
-        "events": _append_event(state, "reporter", "reporter", "最终报告生成完成"),
-    }
-    return {
-        **state,
-        "final_report": report,
-        "result": result,
-        "events": result["events"],
-    }
+    # Always append the canonical evidence, even when a model rewrites the narrative.
+    if not isinstance(response.get("text"), str) or not response["text"].strip():
+        response = {**response, "text": _build_collaboration_report(state), "answer_source": "fallback", "fallback_used": True}
+    report = response["text"] + "\n\n" + evidence_markdown(state)
+    generation = {"source": response.get("answer_source", "fallback"), "trace_id": response.get("trace_id"),
+                  "fallback_used": bool(response.get("fallback_used"))}
+    updated = {**state, "final_report": report, "report_generation": generation,
+               "events": _append_event(state, "reporter", "reporter", "正式报告已生成，附执行范围与证据")}
+    return {**updated, "result": collaboration_result(updated)}
 
 
 def _build_collaboration_report(state: StudioState) -> str:
@@ -272,6 +260,21 @@ def _build_collaboration_report(state: StudioState) -> str:
     rag = state.get("rag_result", {})
     notes = "\n".join(f"- {item}" for item in state.get("supervisor_notes", []))
     stack = ", ".join(analysis.get("tech_stack", [])) or "暂未识别"
+    completed = state.get("completed_agents", [])
+    analysis_summary = (
+        f"- 项目名称：{analysis.get('scan', {}).get('project_name', '未知')}\n"
+        f"- 技术栈：{stack}\n- 质量评分：{analysis.get('quality_score', 'N/A')}"
+        if "project_analyzer" in completed else "未执行项目结构分析。"
+    )
+    review_summary = (
+        f"- 审查评分：{review.get('score', 'N/A')}\n- 问题数量：{len(review.get('findings', []))}"
+        if "code_reviewer" in completed else "未执行代码审查，无法判定代码风险。"
+    )
+    rag_summary = (
+        f"- 文档数量：{len(rag.get('documents', []))}\n- 切片数量：{len(rag.get('chunks', []))}\n"
+        "- 切片尚未自动写入知识库。"
+        if "rag_processor" in completed else "未执行 RAG 知识加工。"
+    )
     return f"""# 多 Agent 协作报告
 
 ## 目标
@@ -280,19 +283,15 @@ def _build_collaboration_report(state: StudioState) -> str:
 
 ## 项目分析摘要
 
-- 项目名称：{analysis.get('scan', {}).get('project_name', '未知')}
-- 技术栈：{stack}
-- 质量评分：{analysis.get('quality_score', 'N/A')}
+{analysis_summary}
 
 ## 代码审查摘要
 
-- 审查评分：{review.get('score', 'N/A')}
-- 问题数量：{len(review.get('findings', []))}
+{review_summary}
 
 ## RAG 知识加工摘要
 
-- 文档数量：{len(rag.get('documents', []))}
-- 切片数量：{len(rag.get('chunks', []))}
+{rag_summary}
 
 ## Supervisor 意见
 
@@ -304,6 +303,8 @@ def _compact_project_analysis(analysis: dict[str, Any]) -> dict[str, Any]:
     return {
         "project_name": analysis.get("scan", {}).get("project_name"),
         "tech_stack": analysis.get("tech_stack", []),
+        "modules": analysis.get("modules", [])[:20],
+        "file_count": len(analysis.get("scan", {}).get("files", [])),
         "quality_score": analysis.get("quality_score"),
         "risks": analysis.get("risks", []),
         "suggestions": analysis.get("suggestions", []),
@@ -314,6 +315,7 @@ def _compact_code_review(review: dict[str, Any]) -> dict[str, Any]:
     return {
         "score": review.get("score"),
         "finding_count": len(review.get("findings", [])),
+        "findings": evidence_records({"code_review": review}),
         "risks": review.get("risks", []),
         "suggestions": review.get("suggestions", []),
         "suggestion_records": review.get("suggestion_records", []),
@@ -328,25 +330,26 @@ def _compact_rag_result(rag: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _build_collaboration_graph():
+def _build_collaboration_graph(checkpointer=None):
     graph = StateGraph(StudioState)
     graph.add_node("planner", _planner_node)
     graph.add_node("project_analyzer", _project_analyzer_subgraph_node)
     graph.add_node("code_reviewer", _code_reviewer_subgraph_node)
     graph.add_node("rag_processor", _rag_processor_subgraph_node)
     graph.add_node("supervisor", _supervisor_node)
+    graph.add_node("review_gate", _prepare_review)
     graph.add_node("human_review", _human_review_node)
     graph.add_node("reporter", _reporter_node)
-
     graph.set_entry_point("planner")
-    graph.add_edge("planner", "project_analyzer")
-    graph.add_edge("project_analyzer", "code_reviewer")
-    graph.add_edge("code_reviewer", "rag_processor")
-    graph.add_edge("rag_processor", "supervisor")
-    graph.add_conditional_edges("supervisor", _should_review, {"review": "human_review", "report": "reporter"})
-    graph.add_edge("human_review", "reporter")
+    destinations = {agent: agent for agent in (*AGENTS, "supervisor")}
+    for node in ("planner", *AGENTS):
+        graph.add_conditional_edges(node, _next_worker, destinations)
+    graph.add_conditional_edges("supervisor", _should_review, {"review": "review_gate", "report": "reporter"})
+    graph.add_edge("review_gate", "human_review")
+    graph.add_conditional_edges("human_review", lambda state: "report" if state["review_decision"] == "approved" else "stop",
+                               {"report": "reporter", "stop": END})
     graph.add_edge("reporter", END)
-    return graph.compile()
+    return graph.compile(checkpointer=checkpointer)
 
 
 collaboration_graph = _build_collaboration_graph()

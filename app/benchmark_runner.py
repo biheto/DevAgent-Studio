@@ -445,7 +445,17 @@ def _run_single_collaboration_case(run_id: str, case: dict[str, Any], iteration:
         human_review_triggered = bool(public.get("human_review_required") or public.get("human_review_packet"))
         risk_detection_score = _rate(risk_hits, len(risk_keywords)) if risk_keywords else (1.0 if public.get("risk_level") else 0.0)
         success = completeness_score >= 60 and (risk_detection_score > 0 or not risk_keywords)
+        execution_status = public.get("execution_status", "completed")
+        evaluation_target = "report"
+        if execution_status == "waiting_review":
+            evaluation_target = "review_gate"
+            success = bool(public.get("resume_checkpoint") and public.get("human_review_packet")) and not report
+        elif execution_status != "completed":
+            success = False
         output = {
+            "execution_status": execution_status,
+            "evaluation_target": evaluation_target,
+            "report_evaluated": bool(report),
             "completeness_score": completeness_score,
             "section_hits": section_hits,
             "expected_section_count": len(expected_sections),
@@ -609,11 +619,14 @@ def _summarize_workflow_benchmark(results: list[dict[str, Any]], cases: list[dic
 def _summarize_collaboration_benchmark(results: list[dict[str, Any]], cases: list[dict[str, Any]], iterations: int) -> dict[str, Any]:
     summary = _summarize_benchmark(results, cases, iterations)
     outputs = [item.get("output") if isinstance(item.get("output"), dict) else {} for item in results]
-    completeness_scores = [int(output.get("completeness_score") or 0) for output in outputs]
-    risk_scores = [float(output.get("risk_detection_score") or 0.0) for output in outputs]
+    report_outputs = [output for output in outputs if output.get("report_evaluated", True)]
+    completeness_scores = [int(output.get("completeness_score") or 0) for output in report_outputs]
+    risk_scores = [float(output.get("risk_detection_score") or 0.0) for output in report_outputs]
     review_triggers = sum(1 for output in outputs if output.get("human_review_triggered"))
     summary.update(
         {
+            "report_evaluated_count": len(report_outputs),
+            "review_gate_case_count": sum(output.get("evaluation_target") == "review_gate" for output in outputs),
             "avg_completeness_score": _avg(completeness_scores),
             "avg_risk_detection_score": round(sum(risk_scores) / len(risk_scores), 4) if risk_scores else 0.0,
             "human_review_trigger_count": review_triggers,

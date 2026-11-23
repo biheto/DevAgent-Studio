@@ -2,7 +2,9 @@ from __future__ import annotations
 
 from typing import Any
 
-from app.graphs.studio_graphs import collaboration_graph
+from app.graphs.studio_graphs import _build_collaboration_graph, collaboration_result, _build_collaboration_report
+from app.graphs.collaboration_policy import evidence_markdown
+from app.harness.durable import execute_graph
 
 
 COLLABORATION_NODES = [
@@ -17,19 +19,37 @@ COLLABORATION_NODES = [
 
 
 def run_collaboration_task(input_state: dict[str, Any]) -> dict[str, Any]:
+    if not input_state.get("task_id"):
+        from app.harness.runtime import harness_runtime
+        context = harness_runtime.create_context(str(input_state.get("goal") or ""), input_state.get("project_path"))
+        return harness_runtime.run_graph(context, run_collaboration_task, input_state)
     graph_state = {
         "goal": input_state.get("goal") or input_state.get("input_text") or "",
         "project_path": input_state.get("project_path"),
         "max_files": input_state.get("max_files", 500),
         "require_human_review": input_state.get("require_human_review", True),
-        "task_id": input_state.get("task_id"),
+        "task_id": input_state["task_id"],
+        "business_scenario": input_state.get("business_scenario", ""),
+        "review_comment": input_state.get("review_comment", ""),
         "events": [],
     }
-    result = collaboration_graph.invoke(graph_state)["result"]
+    if not graph_state["project_path"]:
+        raise ValueError("project_path is required for project collaboration")
+    definition = {"graph_type": "collaboration", "graph_version": 2, "workflow_name": "multi_agent_collaboration"}
+    state = execute_graph(_build_collaboration_graph, definition, graph_state, input_state.get("durable_action"))
+    result = collaboration_result(state)
+    execution_status = state["execution_status"]
+    draft = ""
+    if execution_status != "completed":
+        draft = "# 待审核或未完成的协作摘要\n\n此摘要不是正式报告。\n\n" + _build_collaboration_report(state) + "\n\n" + evidence_markdown(state)
     public_result = {
         **result,
+        "execution_status": execution_status,
+        "execution_error": state.get("execution_error"),
+        "resume_checkpoint": state.get("durable_checkpoint"),
+        "draft_report": draft,
         "workflow_name": "multi_agent_collaboration",
-        "mermaid": build_collaboration_mermaid(),
+        "mermaid": build_collaboration_mermaid(result.get("execution_plan"), result.get("human_review_required", True)),
         "suggestions": _collaboration_suggestions(result),
         "suggestion_records": _collaboration_suggestion_records(result),
         "tool_calls": [],
@@ -44,13 +64,19 @@ def run_collaboration_task(input_state: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def build_collaboration_mermaid() -> str:
+def build_collaboration_mermaid(plan: dict | None = None, review: bool = True) -> str:
+    selected = ["planner", *[step["agent"] for step in (plan or {}).get("steps", [])], "supervisor"] if plan else [node for node, _ in COLLABORATION_NODES if node not in {"human_review", "reporter"}]
+    if review:
+        selected.append("human_review")
+    selected.append("reporter")
+    labels = dict(COLLABORATION_NODES)
     lines = ["flowchart LR"]
-    for node_id, label in COLLABORATION_NODES:
-        lines.append(f"  {node_id}[{label}]")
-    for index, (source, _) in enumerate(COLLABORATION_NODES[:-1]):
-        target = COLLABORATION_NODES[index + 1][0]
-        lines.append(f"  {source} --> {target}")
+    for node_id in selected:
+        lines.append(f"  {node_id}[{labels[node_id]}]")
+    for source, target in zip(selected, selected[1:]):
+        lines.append(f"  {source} -->|{'approve' if source == 'human_review' else 'next'}| {target}")
+    if review:
+        lines.append("  human_review -->|reject| stopped[Stopped]")
     return "\n".join(lines)
 
 
@@ -63,7 +89,7 @@ def _agent_outputs(result: dict[str, Any]) -> list[dict[str, str]]:
                 "node_id": "planner",
                 "node_name": "Planner",
                 "agent": "planner",
-                "content": "\n".join(f"- {item}" for item in plan),
+                "content": f"计划来源：{result.get('planning', {}).get('source', 'unknown')}\n" + "\n".join(f"- {item}" for item in plan),
             }
         )
     for item in result.get("worker_results", []):
@@ -130,7 +156,7 @@ def _collaboration_governance(result: dict[str, Any]) -> dict[str, Any]:
     records = _collaboration_suggestion_records(result)
     code_review = result.get("code_review") or {}
     review_required = bool(result.get("human_review_required")) or any(record.get("review_required") for record in records)
-    risk_level = _highest_risk([record.get("risk_level") for record in records])
+    risk_level = (result.get("quality_gate") or {}).get("risk_level") or _highest_risk([record.get("risk_level") for record in records])
     score = code_review.get("score")
     if isinstance(score, int) and score < 70 and risk_level == "low":
         risk_level = "high"
